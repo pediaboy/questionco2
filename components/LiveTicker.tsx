@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type TickerItem = {
   symbol: string;
@@ -8,47 +8,52 @@ type TickerItem = {
   change: number;
 };
 
-const FALLBACK: TickerItem[] = [
-  { symbol: "BTC/USD", price: 97240.5, change: 1.8 },
-  { symbol: "ETH/USD", price: 3412.2, change: -0.6 },
-  { symbol: "XAU/USD", price: 2648.9, change: 0.4 },
-];
-
 function fmt(n: number) {
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export default function LiveTicker() {
-  const [data, setData] = useState<TickerItem[]>(FALLBACK);
+  const [data, setData] = useState<TickerItem[] | null>(null);
+  const [stale, setStale] = useState(false);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
-    let mounted = true;
+    mountedRef.current = true;
 
     async function pull() {
       try {
-        const res = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true",
-          { cache: "no-store" }
-        );
+        const res = await fetch("/api/ticker", { cache: "no-store" });
         const json = await res.json();
-        if (!mounted || !json?.bitcoin) return;
-        setData((prev) => [
-          { symbol: "BTC/USD", price: json.bitcoin.usd, change: json.bitcoin.usd_24h_change ?? 0 },
-          { symbol: "ETH/USD", price: json.ethereum.usd, change: json.ethereum.usd_24h_change ?? 0 },
-          prev[2] ?? FALLBACK[2],
-        ]);
+        if (!mountedRef.current) return;
+        if (json.success && Array.isArray(json.items)) {
+          setData(json.items);
+          setStale(false);
+        } else {
+          setStale(true);
+        }
       } catch {
-        // silently keep fallback / last known values
+        if (mountedRef.current) setStale(true);
       }
     }
 
     pull();
-    const id = setInterval(pull, 45000);
+    const id = setInterval(pull, 5000);
     return () => {
-      mounted = false;
+      mountedRef.current = false;
       clearInterval(id);
     };
   }, []);
+
+  if (!data) {
+    return (
+      <div className="w-full overflow-hidden border-b border-cyan-400/15 bg-black/40 py-1.5">
+        <div className="flex items-center gap-2 px-4 text-[11px] text-white/30 font-mono">
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400/60 animate-pulse" />
+          [ CONNECTING_TO_MARKET_FEED... ]
+        </div>
+      </div>
+    );
+  }
 
   const row = (
     <div className="flex items-center gap-8 px-4 shrink-0">
@@ -67,6 +72,9 @@ export default function LiveTicker() {
           </span>
         </span>
       ))}
+      {stale && (
+        <span className="text-[9px] text-amber-400/70 font-mono tracking-wider">[ FEED_DELAYED ]</span>
+      )}
     </div>
   );
 
