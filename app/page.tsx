@@ -1,8 +1,11 @@
 import Header from "@/components/Header";
 import Hero from "@/components/Hero";
-import MarketIntel from "@/components/MarketIntel";
-import Ecosystem from "@/components/Ecosystem";
-import EliteCTA from "@/components/EliteCTA";
+import Methodology from "@/components/Methodology";
+import FeatureGatingList from "@/components/FeatureGatingList";
+import ComparisonSection from "@/components/ComparisonSection";
+import TrackRecordSection from "@/components/TrackRecordSection";
+import OnboardingSection from "@/components/OnboardingSection";
+import FaqAccordion from "@/components/FaqAccordion";
 import Footer from "@/components/Footer";
 
 export default function Home() {
@@ -11,9 +14,12 @@ export default function Home() {
       <Header />
       <main>
         <Hero />
-        <MarketIntel />
-        <Ecosystem />
-        <EliteCTA />
+        <Methodology />
+        <FeatureGatingList />
+        <ComparisonSection />
+        <TrackRecordSection />
+        <OnboardingSection />
+        <FaqAccordion />
       </main>
       <Footer />
     </div>

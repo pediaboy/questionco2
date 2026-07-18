@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
-import { Mail, KeyRound, Lock, Loader2 } from "lucide-react";
+import { Mail, KeyRound, Lock, Loader2, ArrowLeft } from "lucide-react";
 
 type Step = "email" | "otp" | "password";
 
@@ -136,6 +136,14 @@ export default function RegisterPage() {
     <div className="min-h-screen max-w-md mx-auto relative">
       <Header />
       <main className="pt-[104px] px-6 pb-16">
+        <button
+          onClick={() => router.push("/")}
+          className="flex items-center gap-1.5 text-[11px] tracking-widest text-gray-400 hover:text-cyan-300 transition-colors duration-200 mb-5"
+        >
+          <ArrowLeft size={14} />
+          KEMBALI KE TERMINAL
+        </button>
+
         <p className="text-[10.5px] tracking-[0.3em] font-semibold mb-3 text-cyan-300">
           [ NEW_OPERATIVE // REGISTER ]
         </p>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import LiveTicker from "./LiveTicker";
 import HamburgerOverlay from "./HamburgerOverlay";
 
@@ -23,9 +24,17 @@ export default function Header() {
         <a href="/" className="font-display font-bold text-lg tracking-wide text-white">
           LASTQUESTION.CO<span className="text-cyan-300 text-glow-cyan">.</span>
         </a>
-        <button onClick={() => setOpen(true)} aria-label="Menu" className="p-2 -m-2">
-          <SignalHamburger />
-        </button>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/login"
+            className="chamfer-btn bg-cyan-400 text-black font-bold text-[10px] px-3 py-2 transition-all hover:bg-cyan-300 active:scale-95"
+          >
+            [ SYSTEM LOGIN -&gt; ]
+          </Link>
+          <button onClick={() => setOpen(true)} aria-label="Menu" className="p-2 -m-2">
+            <SignalHamburger />
+          </button>
+        </div>
       </header>
 
       <LiveTicker />

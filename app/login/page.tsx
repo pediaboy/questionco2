@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { LogIn, Loader2 } from "lucide-react";
+import { LogIn, Loader2, ArrowLeft } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
 function LoginForm() {
@@ -28,7 +28,15 @@ function LoginForm() {
   }
 
   return (
-    <div className="min-h-screen max-w-md mx-auto flex flex-col justify-center px-6 py-10">
+    <div className="min-h-screen max-w-md mx-auto flex flex-col justify-center px-6 py-10 relative">
+      <button
+        onClick={() => router.push("/")}
+        className="absolute top-6 left-6 flex items-center gap-1.5 text-[11px] tracking-widest text-gray-400 hover:text-cyan-300 transition-colors duration-200"
+      >
+        <ArrowLeft size={14} />
+        KEMBALI KE TERMINAL
+      </button>
+
       <p className="text-[10.5px] tracking-[0.3em] text-cyan-300/70 font-semibold mb-2 text-center">
         [ AUTH // LOGIN ]
       </p>
