@@ -5,6 +5,7 @@ import Methodology from "@/components/Methodology";
 import FeatureGatingList from "@/components/FeatureGatingList";
 import ComparisonSection from "@/components/ComparisonSection";
 import TrackRecordSection from "@/components/TrackRecordSection";
+import LotContestSection from "@/components/LotContestSection";
 import OnboardingSection from "@/components/OnboardingSection";
 import FaqAccordion from "@/components/FaqAccordion";
 import Footer from "@/components/Footer";
@@ -20,6 +21,7 @@ export default function Home() {
         <FeatureGatingList />
         <ComparisonSection />
         <TrackRecordSection />
+        <LotContestSection />
         <OnboardingSection />
         <FaqAccordion />
       </main>

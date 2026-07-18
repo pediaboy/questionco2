@@ -38,13 +38,13 @@ export default function LeaderboardPage() {
           ))}
         </div>
         <p className="text-[10.5px] text-white/50 leading-relaxed">
-          Wajib daftar akun trading lewat broker partner gratis kami untuk ikut kontes ini.
+          Lot dihitung otomatis dari akun trading real yang sudah terverifikasi.
         </p>
         <Link
-          href="/dashboard/upgrade"
+          href="/dashboard/kontes"
           className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-400 hover:text-amber-300"
         >
-          <Zap size={12} /> Daftar Broker Gratis Sekarang &rarr;
+          <Zap size={12} /> Lihat Syarat &amp; Ketentuan &rarr;
         </Link>
       </div>
 

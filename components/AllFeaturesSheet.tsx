@@ -16,6 +16,7 @@ import {
   BookOpen,
   Wallet,
   Lock,
+  Gem,
 } from "lucide-react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import VipUpgradeModal from "./VipUpgradeModal";
@@ -55,6 +56,7 @@ const CATEGORIES: { title: string; items: FeatureItem[] }[] = [
     title: "CUAN",
     items: [
       { label: "Leaderboard", href: "/dashboard/leaderboard", icon: Trophy },
+      { label: "Kontes Lot", href: "/dashboard/kontes", icon: Gem },
       { label: "Pengumuman", href: "/dashboard/pengumuman", icon: Bell },
       { label: "Upgrade VIP", href: "/dashboard/upgrade", icon: Wallet },
     ],
