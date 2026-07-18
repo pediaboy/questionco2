@@ -1,0 +1,200 @@
+@import "tailwindcss";
+
+:root {
+  --abyss: #05080f;
+  --panel: #0b0f18;
+  --card: #111520;
+  --cyan: #00f0ff;
+  --magenta: #b026ff;
+  --line: rgba(0, 240, 255, 0.22);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background: var(--abyss);
+  color: #e7edf5;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  overflow-x: hidden;
+}
+
+body {
+  background-image:
+    linear-gradient(rgba(0, 240, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 240, 255, 0.05) 1px, transparent 1px),
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(176, 38, 255, 0.14), transparent);
+  background-size: 34px 34px, 34px 34px, 100% 100%;
+}
+
+.font-display {
+  font-family: var(--font-display), sans-serif;
+}
+
+/* ============ Chamfered / cut-corner shapes ============ */
+.chamfer {
+  clip-path: polygon(
+    16px 0,
+    100% 0,
+    100% calc(100% - 16px),
+    calc(100% - 16px) 100%,
+    0 100%,
+    0 16px
+  );
+}
+.chamfer-sm {
+  clip-path: polygon(
+    9px 0,
+    100% 0,
+    100% calc(100% - 9px),
+    calc(100% - 9px) 100%,
+    0 100%,
+    0 9px
+  );
+}
+.chamfer-btn {
+  clip-path: polygon(
+    12px 0,
+    100% 0,
+    100% calc(100% - 12px),
+    calc(100% - 12px) 100%,
+    0 100%,
+    0 12px
+  );
+}
+
+/* ============ Neon text / glow utilities ============ */
+.text-glow-cyan {
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.55), 0 0 26px rgba(0, 240, 255, 0.25);
+}
+.text-glow-magenta {
+  text-shadow: 0 0 10px rgba(176, 38, 255, 0.55), 0 0 26px rgba(176, 38, 255, 0.25);
+}
+.box-glow-cyan {
+  box-shadow: 0 0 0 1px rgba(0, 240, 255, 0.35), 0 0 26px rgba(0, 240, 255, 0.12);
+}
+.box-glow-magenta {
+  box-shadow: 0 0 0 1px rgba(176, 38, 255, 0.4), 0 0 32px rgba(176, 38, 255, 0.22);
+}
+
+/* ============ Ticker marquee ============ */
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+.animate-marquee {
+  animation: marquee 22s linear infinite;
+}
+
+/* ============ Scan line sweep ============ */
+@keyframes scanline {
+  0% {
+    top: -10%;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  100% {
+    top: 110%;
+    opacity: 0;
+  }
+}
+.scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  filter: drop-shadow(0 0 6px var(--cyan));
+  animation: scanline 5s ease-in-out infinite;
+}
+
+/* ============ Glitch text ============ */
+@keyframes glitch-1 {
+  0%, 92%, 100% { clip-path: inset(0 0 0 0); transform: translate(0,0); }
+  93% { clip-path: inset(10% 0 60% 0); transform: translate(-2px,1px); }
+  94% { clip-path: inset(40% 0 20% 0); transform: translate(2px,-1px); }
+  95% { clip-path: inset(70% 0 5% 0); transform: translate(-1px,0); }
+  96% { clip-path: inset(0 0 0 0); transform: translate(0,0); }
+}
+.glitch {
+  position: relative;
+  display: inline-block;
+}
+.glitch::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  color: var(--cyan);
+  animation: glitch-1 5s infinite;
+  z-index: -1;
+}
+
+/* ============ Blinking cursor for typewriter ============ */
+@keyframes blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.cursor-blink::after {
+  content: "_";
+  animation: blink 1s step-start infinite;
+  color: var(--cyan);
+}
+
+/* ============ Progressive dashed signal bars (hamburger) ============ */
+@keyframes signal-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+.signal-bar {
+  animation: signal-pulse 1.6s ease-in-out infinite;
+}
+
+/* ============ Vertical dotted scroll indicator ============ */
+@keyframes dot-glow {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+.dot-pulse {
+  animation: dot-glow 1.8s ease-in-out infinite;
+}
+
+/* ============ Card active/touch state ============ */
+.hud-card {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+}
+.hud-card:active {
+  transform: scale(0.985);
+  border-color: rgba(0, 240, 255, 0.8);
+  box-shadow: 0 0 0 1px rgba(0, 240, 255, 0.6), 0 0 30px rgba(0, 240, 255, 0.25);
+}
+
+/* ============ Battery-style progressive indicator ============ */
+.hud-bracket {
+  color: var(--cyan);
+  opacity: 0.6;
+  font-weight: 700;
+}
+
+::selection {
+  background: rgba(0, 240, 255, 0.3);
+  color: #fff;
+}
+
+/* Hide scrollbar but keep function */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 240, 255, 0.3);
+}
