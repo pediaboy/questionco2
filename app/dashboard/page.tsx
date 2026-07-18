@@ -3,15 +3,19 @@
 import React from "react";
 import Link from "next/link";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
+import { useMemberStats } from "@/lib/useMemberStats";
 import MemberHeroStats from "@/components/MemberHeroStats";
 import QuickMenuGrid from "@/components/QuickMenuGrid";
 
 export default function MemberDashboard() {
-  const { profile } = useMemberAuth();
+  const { profile: authProfile } = useMemberAuth();
+  const { profile: statsProfile } = useMemberStats();
 
-  if (!profile) return null;
+  if (!authProfile) return null;
 
-  const displayName = profile.full_name || profile.email.split("@")[0];
+  // Use live stats profile if loaded, otherwise fall back to auth profile
+  const displayProfile = statsProfile || authProfile;
+  const displayName = displayProfile.full_name || displayProfile.email.split("@")[0];
 
   return (
     <div>
@@ -26,13 +30,13 @@ export default function MemberDashboard() {
       </div>
 
       {/* Hero Stats */}
-      <MemberHeroStats profile={profile} />
+      <MemberHeroStats profile={displayProfile} />
 
       {/* Quick Menu Grid */}
       <QuickMenuGrid />
 
       {/* VIP Upsell Banner (if not already VIP) */}
-      {!profile.is_vip && (
+      {!displayProfile.is_vip && (
         <Link
           href="/vip"
           className="block my-6 chamfer-sm p-4 border border-[#FFD700]/30 bg-gradient-to-r from-amber-950/20 to-black relative overflow-hidden group active:border-[#FFD700]/80 transition-all duration-200"

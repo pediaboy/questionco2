@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { MemberAuthProvider, useMemberAuth } from "@/lib/MemberAuthContext";
 import MemberHeader from "@/components/MemberHeader";
 import MemberBottomNav from "@/components/MemberBottomNav";
+import SyncIndicator from "@/components/SyncIndicator";
 
 function MemberLayoutContent({ children }: { children: React.ReactNode }) {
   const { loading, notLoggedIn } = useMemberAuth();
@@ -36,8 +37,9 @@ function MemberLayoutContent({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen max-w-md mx-auto relative">
+      <SyncIndicator />
       <MemberHeader />
-      <main className="pt-24 px-5 pb-28 max-w-md mx-auto">
+      <main className="pt-20 px-4 pb-28 max-w-md mx-auto">
         {children}
       </main>
       <MemberBottomNav />

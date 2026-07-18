@@ -2,6 +2,7 @@
 
 import React from "react";
 import { Trophy, LineChart, TrendingUp, TrendingDown, GraduationCap } from "lucide-react";
+import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { MemberProfile } from "@/lib/MemberAuthContext";
 
 interface MemberHeroStatsProps {
@@ -9,6 +10,7 @@ interface MemberHeroStatsProps {
 }
 
 export default function MemberHeroStats({ profile }: MemberHeroStatsProps) {
+  const [parent] = useAutoAnimate();
   const profit = profile.profit_pips;
   const isProfitPositive = profit >= 0;
 
@@ -45,13 +47,13 @@ export default function MemberHeroStats({ profile }: MemberHeroStatsProps) {
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3.5 my-6">
+    <div ref={parent} className="grid grid-cols-2 gap-3.5 my-6">
       {stats.map((stat, i) => {
         const IconComponent = stat.icon;
         return (
           <div
             key={i}
-            className="chamfer-sm bg-[#0f172a]/70 backdrop-blur-sm border border-white/10 p-4 relative flex flex-col justify-between h-[105px]"
+            className="chamfer-sm bg-[#0f172a]/70 backdrop-blur-sm border border-white/10 p-4 relative flex flex-col justify-between h-[110px] active:border-cyan-400 active:shadow-[0_0_15px_rgba(0,240,255,0.3)] transition-all duration-200"
           >
             {/* Tactical Corner Accents */}
             <div className="absolute top-[3px] left-[3px] w-2.5 h-2.5 border-t border-l border-cyan-400/70" />

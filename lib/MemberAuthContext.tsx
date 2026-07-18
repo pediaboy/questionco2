@@ -15,6 +15,7 @@ export interface MemberProfile {
   total_trade: number;
   profit_pips: number;
   kelas_completed: number;
+  telegram_username?: string;
 }
 
 interface MemberAuthContextType {

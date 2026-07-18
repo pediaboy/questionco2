@@ -74,13 +74,14 @@ export default function QuickMenuGrid() {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-4 gap-x-3 gap-y-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div
               key={i}
-              className="aspect-square bg-black/40 border border-white/5 octagon animate-pulse flex items-center justify-center"
+              className="flex flex-col items-center"
             >
-              <div className="w-5 h-5 bg-white/10 rounded-full" />
+              <div className="w-[60px] h-[60px] bg-black/40 border border-white/5 octagon-precise animate-pulse" />
+              <div className="w-12 h-2.5 bg-white/10 mt-2 rounded" />
             </div>
           ))}
         </div>
@@ -89,21 +90,23 @@ export default function QuickMenuGrid() {
           <span className="text-xs text-slate-500 font-mono">[ TIDAK ADA MENU CEPAT AKTIF ]</span>
         </div>
       ) : (
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-4 gap-x-3 gap-y-4">
           {items.map((item) => {
             const IconComponent = ICONS[item.icon_key] || NotebookPen;
             return (
               <Link
                 key={item.id}
                 href={item.href}
-                className="group flex flex-col items-center justify-center aspect-square bg-black/60 border border-white/10 octagon transition-all duration-200 active:border-cyan-400/60 active:bg-cyan-950/20 active:shadow-[0_0_12px_rgba(0,240,255,0.15)] text-center p-1"
+                className="group flex flex-col items-center justify-start text-center"
               >
-                <IconComponent
-                  size={22}
-                  strokeWidth={1.5}
-                  className="text-slate-300 group-active:text-cyan-300 transition-colors duration-200"
-                />
-                <span className="text-[10px] text-white/70 group-active:text-cyan-300 mt-1.5 font-sans leading-tight block truncate w-full px-1">
+                <div className="w-[60px] h-[60px] flex items-center justify-center bg-black/60 border border-white/10 octagon-precise transition-all duration-200 group-active:border-cyan-400/60 group-active:bg-cyan-950/20 group-active:shadow-[0_0_12px_rgba(0,240,255,0.15)]">
+                  <IconComponent
+                    size={22}
+                    strokeWidth={1.5}
+                    className="text-slate-300 group-active:text-cyan-300 transition-colors duration-200"
+                  />
+                </div>
+                <span className="text-[11px] text-white/70 group-active:text-cyan-300 mt-2 font-sans leading-tight block truncate w-full px-1">
                   {item.label}
                 </span>
               </Link>

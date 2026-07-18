@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { UserRound } from "lucide-react";
 import Link from "next/link";
-import HamburgerOverlay from "./HamburgerOverlay";
+import DashboardHamburgerOverlay from "./DashboardHamburgerOverlay";
+import HudClock from "./HudClock";
 
 function SignalHamburger() {
   return (
@@ -20,22 +21,25 @@ export default function MemberHeader() {
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50">
-      <header className="flex items-center justify-between px-5 py-4 bg-black/55 backdrop-blur-xl border-b border-dashed border-cyan-400/25 max-w-md mx-auto">
+      <header className="flex items-center justify-between px-5 py-3 bg-black/55 backdrop-blur-xl border-b border-dashed border-cyan-400/25 max-w-md mx-auto">
         <button onClick={() => setOpen(true)} aria-label="Menu" className="p-2 -m-2">
           <SignalHamburger />
         </button>
 
-        <Link href="/dashboard" className="font-display font-bold text-base tracking-[0.15em] text-white">
-          LASTQUESTION<span className="text-cyan-300 text-glow-cyan">.</span>
-        </Link>
+        <div className="flex flex-col items-center">
+          <Link href="/dashboard" className="font-display font-bold text-base tracking-[0.15em] text-white">
+            LASTQUESTION<span className="text-cyan-300 text-glow-cyan">.</span>
+          </Link>
+          <HudClock />
+        </div>
 
-        <Link href="/vip" className="relative p-2 -m-2 block">
+        <Link href="/dashboard/profil" className="relative p-2 -m-2 block">
           <UserRound size={22} strokeWidth={1.5} className="text-white/70" />
           <span className="absolute bottom-1 right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 border border-black shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
         </Link>
       </header>
 
-      <HamburgerOverlay open={open} onClose={() => setOpen(false)} />
+      <DashboardHamburgerOverlay open={open} onClose={() => setOpen(false)} />
     </div>
   );
 }

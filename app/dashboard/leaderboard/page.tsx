@@ -1,43 +1,11 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { Trophy, TrendingUp, LineChart } from "lucide-react";
-
-interface LeaderboardItem {
-  name: string;
-  profit_pips: number;
-  win_rate: number;
-  total_trade: number;
-}
+import { useLeaderboard } from "@/lib/useLeaderboard";
 
 export default function LeaderboardPage() {
-  const [items, setItems] = useState<LeaderboardItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    async function fetchLeaderboard() {
-      try {
-        const res = await fetch("/api/member/leaderboard");
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && Array.isArray(data.items)) {
-            setItems(data.items);
-          } else {
-            setError(true);
-          }
-        } else {
-          setError(true);
-        }
-      } catch (err) {
-        console.error("Failed to fetch leaderboard:", err);
-        setError(true);
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchLeaderboard();
-  }, []);
+  const { items, isLoading, isError } = useLeaderboard();
 
   return (
     <div>
@@ -52,7 +20,7 @@ export default function LeaderboardPage() {
         <p className="text-xs text-[#94A3B8] mt-1">Peringkat trader berdasarkan total akumulasi profit pips.</p>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="space-y-3">
           {Array.from({ length: 5 }).map((_, i) => (
             <div
@@ -61,11 +29,11 @@ export default function LeaderboardPage() {
             />
           ))}
         </div>
-      ) : error ? (
+      ) : isError ? (
         <div className="text-center py-8 bg-[#0f172a]/50 border border-dashed border-red-500/20 chamfer-sm">
           <span className="text-xs text-red-400 font-mono">[ ERROR LOADING LEADERBOARD ]</span>
         </div>
-      ) : items.length === 0 ? (
+      ) : !items || items.length === 0 ? (
         <div className="text-center py-12 bg-[#0f172a]/30 border border-dashed border-white/10 chamfer-sm">
           <span className="text-xs text-slate-500 font-mono">[ LEADERBOARD KOSONG ]</span>
         </div>
