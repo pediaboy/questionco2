@@ -17,7 +17,7 @@ export default function MemberBottomNav() {
   };
 
   const navItems = [
-    { label: "Home", href: "/member", icon: LineChart },
+    { label: "Home", href: "/dashboard", icon: LineChart },
     { label: "Kelas", href: "/gratis", icon: GraduationCap },
     { label: "Sinyal", href: "/vip", icon: Radio },
   ];

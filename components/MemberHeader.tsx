@@ -25,7 +25,7 @@ export default function MemberHeader() {
           <SignalHamburger />
         </button>
 
-        <Link href="/member" className="font-display font-bold text-base tracking-[0.15em] text-white">
+        <Link href="/dashboard" className="font-display font-bold text-base tracking-[0.15em] text-white">
           LASTQUESTION<span className="text-cyan-300 text-glow-cyan">.</span>
         </Link>
 
