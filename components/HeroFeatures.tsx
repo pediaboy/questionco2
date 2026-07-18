@@ -2,21 +2,16 @@
 
 import Sparkline from "./Sparkline";
 
-export default function Hero() {
+export default function HeroFeatures() {
   return (
-    <section id="top" className="relative pt-[124px] px-5 pb-10">
-      {/* corner HUD brackets */}
-      <div className="absolute top-[108px] left-5 text-cyan-400/50 text-[10px] font-semibold tracking-widest hud-bracket select-none">
-        [ SYS.ONLINE ]
-      </div>
-
+    <section id="modules" className="relative pt-8 px-5 pb-10">
       <div className="text-center mb-10">
         <p className="text-[11px] tracking-[0.3em] text-cyan-300/70 font-semibold mb-3">
           ECOSYSTEM // ANALYTICS + SIGNALS + COMMUNITY
         </p>
-        <h1 className="font-display font-bold text-white text-[32px] leading-[1.1] tracking-tight uppercase">
+        <h2 className="font-display font-bold text-white text-[32px] leading-[1.1] tracking-tight uppercase">
           TERMINAL LENGKAP<br />DI <span className="text-cyan-300 text-glow-cyan">GENGGAMANMU</span>.
-        </h1>
+        </h2>
         <p className="mt-4 text-white/50 text-[13px] leading-relaxed max-w-[320px] mx-auto">
           Empat modul unggulan. Akses sinyal, analisis whale, dan sesi market dalam satu ekosistem.
         </p>

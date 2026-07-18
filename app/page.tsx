@@ -1,5 +1,6 @@
 import Header from "@/components/Header";
-import Hero from "@/components/Hero";
+import HeroClassic from "@/components/HeroClassic";
+import HeroFeatures from "@/components/HeroFeatures";
 import Methodology from "@/components/Methodology";
 import FeatureGatingList from "@/components/FeatureGatingList";
 import ComparisonSection from "@/components/ComparisonSection";
@@ -13,7 +14,8 @@ export default function Home() {
     <div className="min-h-screen max-w-md mx-auto relative">
       <Header />
       <main>
-        <Hero />
+        <HeroClassic />
+        <HeroFeatures />
         <Methodology />
         <FeatureGatingList />
         <ComparisonSection />
