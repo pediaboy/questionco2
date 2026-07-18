@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { LogIn, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const params = useSearchParams();
+  const justRegistered = params.get("registered") === "1";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -33,6 +35,12 @@ export default function LoginPage() {
       <h1 className="font-display font-bold text-white text-2xl text-center mb-8 uppercase">
         Access Terminal
       </h1>
+
+      {justRegistered && (
+        <div className="mb-5 text-[12.5px] text-cyan-300 border border-cyan-400/40 bg-cyan-400/5 px-3 py-2.5 clip-corner text-center">
+          Akun berhasil dibuat. Silakan login.
+        </div>
+      )}
 
       <form onSubmit={handleLogin} className="flex flex-col gap-4">
         <input
@@ -71,5 +79,13 @@ export default function LoginPage() {
         </a>
       </p>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
   );
 }

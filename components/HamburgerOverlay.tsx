@@ -5,12 +5,12 @@ import { UserRound } from "lucide-react";
 
 const MENU = [
   { label: "Home", href: "/" },
-  { label: "Tentang", href: "/#top" },
-  { label: "Gratis", href: "/#market" },
-  { label: "Analisa", href: "/#market" },
-  { label: "Blog", href: "/#ecosystem" },
-  { label: "FAQ", href: "/#elite" },
-  { label: "Kontak", href: "https://instagram.com/lastquestion.co" },
+  { label: "Tentang", href: "/tentang" },
+  { label: "Gratis", href: "/gratis" },
+  { label: "Analisa", href: "/analisa" },
+  { label: "Blog", href: "/blog" },
+  { label: "FAQ", href: "/faq" },
+  { label: "Kontak", href: "/kontak" },
 ];
 
 export default function HamburgerOverlay({
