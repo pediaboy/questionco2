@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { ShieldCheck, RefreshCw, Check, X } from "lucide-react";
+import { ShieldCheck, RefreshCw, Check, X, RotateCcw, Edit2, Trash2 } from "lucide-react";
 
 type Invoice = {
   id: string;
@@ -21,6 +21,23 @@ type Profile = {
   expired_at: string | null;
 };
 
+type QuickMenuItem = {
+  id: string;
+  label: string;
+  icon_key: string;
+  href: string;
+  sort_order: number;
+  active: boolean;
+};
+
+type Announcement = {
+  id: string;
+  title: string;
+  body: string;
+  pinned: boolean;
+  created_at: string;
+};
+
 function daysLeft(expired_at: string | null) {
   if (!expired_at) return null;
   const diff = new Date(expired_at).getTime() - Date.now();
@@ -33,16 +50,27 @@ export default function AdminPage() {
   const [pass, setPass] = useState("");
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [quickMenuItems, setQuickMenuItems] = useState<QuickMenuItem[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Announcement Form State
+  const [annTitle, setAnnTitle] = useState("");
+  const [annBody, setAnnBody] = useState("");
+  const [annPinned, setAnnPinned] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [invRes, profRes] = await Promise.all([
+    const [invRes, profRes, qmRes, annRes] = await Promise.all([
       fetch("/api/admin/invoices").then((r) => r.json()),
       fetch("/api/admin/profiles").then((r) => r.json()),
+      fetch("/api/admin/quick-menu").then((r) => r.json().catch(() => ({ success: false, items: [] }))),
+      fetch("/api/admin/announcements").then((r) => r.json().catch(() => ({ success: false, items: [] }))),
     ]);
     if (invRes.success) setInvoices(invRes.invoices);
     if (profRes.success) setProfiles(profRes.profiles);
+    if (qmRes.success) setQuickMenuItems(qmRes.items);
+    if (annRes.success) setAnnouncements(annRes.items);
     setLoading(false);
   }, []);
 
@@ -93,6 +121,70 @@ export default function AdminPage() {
     });
     const json = await res.json();
     if (!json.success) return alert("Gagal: " + json.error);
+    load();
+  }
+
+  async function handleResetStats(p: Profile) {
+    if (!confirm(`Reset statistik trading untuk ${p.email}?`)) return;
+    const res = await fetch("/api/admin/profiles", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: p.id, reset_stats: true }),
+    });
+    const json = await res.json();
+    if (!json.success) return alert("Gagal: " + json.error);
+    load();
+  }
+
+  async function toggleQuickMenu(id: string, active: boolean) {
+    const res = await fetch("/api/admin/quick-menu", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, active }),
+    });
+    const json = await res.json();
+    if (!json.success) return alert("Gagal: " + json.error);
+    load();
+  }
+
+  async function editQuickMenu(id: string, currentLabel: string, currentHref: string) {
+    const label = prompt("Edit label menu:", currentLabel);
+    if (label === null) return; // cancelled
+    const href = prompt("Edit href menu:", currentHref);
+    if (href === null) return; // cancelled
+
+    const res = await fetch("/api/admin/quick-menu", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, label, href }),
+    });
+    const json = await res.json();
+    if (!json.success) return alert("Gagal: " + json.error);
+    load();
+  }
+
+  async function deleteAnnouncement(id: string) {
+    if (!confirm("Hapus pengumuman ini?")) return;
+    const res = await fetch(`/api/admin/announcements?id=${id}`, {
+      method: "DELETE",
+    });
+    const json = await res.json();
+    if (!json.success) return alert("Gagal: " + json.error);
+    load();
+  }
+
+  async function handlePostAnnouncement(e: React.FormEvent) {
+    e.preventDefault();
+    const res = await fetch("/api/admin/announcements", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: annTitle, body: annBody, pinned: annPinned }),
+    });
+    const json = await res.json();
+    if (!json.success) return alert("Gagal: " + json.error);
+    setAnnTitle("");
+    setAnnBody("");
+    setAnnPinned(false);
     load();
   }
 
@@ -199,7 +291,7 @@ export default function AdminPage() {
       <h2 className="text-white/70 text-sm font-bold mb-3 tracking-wide">
         [ MEMBERS — EXPIRING SOON FIRST ]
       </h2>
-      <div className="border border-cyan-400/20 chamfer-sm bg-[#0b0f18]/70 overflow-x-auto">
+      <div className="border border-cyan-400/20 chamfer-sm bg-[#0b0f18]/70 overflow-x-auto mb-8">
         <table className="w-full text-[12px] text-left">
           <thead>
             <tr className="text-white/40 border-b border-cyan-400/15">
@@ -236,9 +328,18 @@ export default function AdminPage() {
                     )}
                   </td>
                   <td className="p-3">
-                    <button onClick={() => overrideExtend(p)} className="text-cyan-300 underline text-[11px]">
-                      Extend
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => overrideExtend(p)} className="text-cyan-300 underline text-[11px]">
+                        Extend
+                      </button>
+                      <button
+                        onClick={() => handleResetStats(p)}
+                        title="Reset statistik trading"
+                        className="text-red-400 hover:text-red-300 flex items-center gap-0.5 text-[11px]"
+                      >
+                        <RotateCcw size={13} /> Reset
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -252,6 +353,141 @@ export default function AdminPage() {
             )}
           </tbody>
         </table>
+      </div>
+
+      <h2 className="text-white/70 text-sm font-bold mb-3 tracking-wide">
+        [ QUICK MENU MANAGEMENT ]
+      </h2>
+      <div className="border border-cyan-400/20 chamfer-sm bg-[#0b0f18]/70 mb-8 overflow-x-auto">
+        <table className="w-full text-[12px] text-left">
+          <thead>
+            <tr className="text-white/40 border-b border-cyan-400/15">
+              <th className="p-3">Label</th>
+              <th className="p-3">Icon Key</th>
+              <th className="p-3">Href</th>
+              <th className="p-3">Status</th>
+              <th className="p-3">Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {quickMenuItems.map((item) => (
+              <tr key={item.id} className="border-b border-cyan-400/10 text-white/80">
+                <td className="p-3 font-semibold text-cyan-300">{item.label}</td>
+                <td className="p-3 font-mono text-white/60">{item.icon_key}</td>
+                <td className="p-3 font-mono text-white/60">{item.href}</td>
+                <td className="p-3">
+                  <button
+                    onClick={() => toggleQuickMenu(item.id, !item.active)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono border ${
+                      item.active
+                        ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
+                        : "bg-red-950/40 border-red-500/40 text-red-400"
+                    }`}
+                  >
+                    {item.active ? "ACTIVE" : "INACTIVE"}
+                  </button>
+                </td>
+                <td className="p-3">
+                  <button
+                    onClick={() => editQuickMenu(item.id, item.label, item.href)}
+                    className="text-cyan-300 hover:underline flex items-center gap-1"
+                  >
+                    <Edit2 size={13} /> Edit
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {quickMenuItems.length === 0 && (
+              <tr>
+                <td colSpan={5} className="p-4 text-center text-white/30">
+                  Belum ada menu
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <h2 className="text-white/70 text-sm font-bold mb-3 tracking-wide">
+        [ ANNOUNCEMENTS MANAGEMENT ]
+      </h2>
+      <div className="border border-cyan-400/20 chamfer-sm bg-[#0b0f18]/70 mb-6 p-4">
+        {/* List */}
+        <div className="space-y-3 mb-6 max-h-[300px] overflow-y-auto pr-1">
+          {announcements.map((ann) => (
+            <div
+              key={ann.id}
+              className="border-b border-cyan-400/10 pb-3 last:border-0 last:pb-0 flex items-start justify-between gap-4"
+            >
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-white text-xs">{ann.title}</h3>
+                  {ann.pinned && (
+                    <span className="text-[8px] bg-cyan-950/40 border border-cyan-500/40 text-cyan-400 px-1 py-0.2 rounded font-mono font-bold">
+                      PINNED
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-white/60 mt-1 whitespace-pre-wrap font-sans">{ann.body}</p>
+                <span className="text-[9px] text-white/30 font-mono mt-1 block">
+                  {new Date(ann.created_at).toLocaleString("id-ID")}
+                </span>
+              </div>
+              <button
+                onClick={() => deleteAnnouncement(ann.id)}
+                className="text-red-400 hover:text-red-300 shrink-0 p-1"
+                title="Hapus Pengumuman"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+          {announcements.length === 0 && (
+            <p className="text-center text-white/30 text-xs py-4 font-mono">[ BELUM ADA PENGUMUMAN ]</p>
+          )}
+        </div>
+
+        {/* Form separator */}
+        <div className="border-t border-cyan-400/15 pt-4">
+          <h3 className="text-[10px] text-cyan-300 font-bold tracking-wider font-mono mb-3 uppercase">
+            [ POST NEW ANNOUNCEMENT ]
+          </h3>
+          <form onSubmit={handlePostAnnouncement} className="space-y-3">
+            <input
+              type="text"
+              required
+              placeholder="JUDUL PENGUMUMAN"
+              value={annTitle}
+              onChange={(e) => setAnnTitle(e.target.value)}
+              className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm"
+            />
+            <textarea
+              required
+              rows={3}
+              placeholder="ISI PENGUMUMAN..."
+              value={annBody}
+              onChange={(e) => setAnnBody(e.target.value)}
+              className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm font-sans resize-none"
+            />
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 text-xs text-white/60 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={annPinned}
+                  onChange={(e) => setAnnPinned(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-cyan-400 bg-transparent border-cyan-400/20"
+                />
+                Pin pengumuman ini di atas
+              </label>
+              <button
+                type="submit"
+                className="chamfer-btn bg-cyan-400 text-black font-bold text-xs tracking-wider px-4 py-2 hover:bg-cyan-300"
+              >
+                SUBMIT PENGUMUMAN
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );

@@ -75,6 +75,28 @@ body {
   );
 }
 
+/* ============ Custom Octagon & Trapezoid shapes ============ */
+.octagon {
+  clip-path: polygon(
+    10px 0,
+    calc(100% - 10px) 0,
+    100% 10px,
+    100% calc(100% - 10px),
+    calc(100% - 10px) 100%,
+    10px 100%,
+    0 calc(100% - 10px),
+    0 10px
+  );
+}
+.trapezoid-nav {
+  clip-path: polygon(
+    14px 0,
+    calc(100% - 14px) 0,
+    100% 100%,
+    0 100%
+  );
+}
+
 /* ============ Neon text / glow utilities ============ */
 .text-glow-cyan {
   text-shadow: 0 0 10px rgba(0, 240, 255, 0.55), 0 0 26px rgba(0, 240, 255, 0.25);

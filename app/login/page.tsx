@@ -24,7 +24,7 @@ function LoginForm() {
       setError(error.message);
       return;
     }
-    router.push("/vip");
+    router.push("/member");
   }
 
   return (
