@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { ShieldCheck, RefreshCw, Check, X, RotateCcw, Edit2, Trash2, BarChart3 } from "lucide-react";
+import Link from "next/link";
+import { ShieldCheck, RefreshCw, Check, X, RotateCcw, Edit2, Trash2, BarChart3, UserPlus, KeyRound, Trophy } from "lucide-react";
+import { isAdminAuthed, setAdminAuthed, ADMIN_USER, ADMIN_PASS } from "@/lib/adminAuth";
 
 type Invoice = {
   id: string;
@@ -49,8 +51,16 @@ function daysLeft(expired_at: string | null) {
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
+  const [checkedSession, setCheckedSession] = useState(false);
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
+
+  // New Account form state
+  const [newAccEmail, setNewAccEmail] = useState("");
+  const [newAccPass, setNewAccPass] = useState("");
+  const [newAccName, setNewAccName] = useState("");
+  const [newAccLoading, setNewAccLoading] = useState(false);
+  const [newAccMessage, setNewAccMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [quickMenuItems, setQuickMenuItems] = useState<QuickMenuItem[]>([]);
@@ -96,13 +106,72 @@ export default function AdminPage() {
     if (authed) load();
   }, [authed, load]);
 
+  useEffect(() => {
+    if (isAdminAuthed()) setAuthed(true);
+    setCheckedSession(true);
+  }, []);
+
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
-    if (user === "admin" && pass === "lastquestion2026") {
+    if (user === ADMIN_USER && pass === ADMIN_PASS) {
+      setAdminAuthed(true);
       setAuthed(true);
     } else {
       alert("Kredensial salah");
     }
+  }
+
+  function handleLogout() {
+    setAdminAuthed(false);
+    setAuthed(false);
+  }
+
+  async function handleCreateAccount(e: React.FormEvent) {
+    e.preventDefault();
+    setNewAccLoading(true);
+    setNewAccMessage(null);
+    try {
+      const res = await fetch("/api/admin/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: newAccEmail, password: newAccPass, full_name: newAccName }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setNewAccMessage({ text: `Akun ${newAccEmail} berhasil dibuat & langsung aktif.`, type: "success" });
+        setNewAccEmail("");
+        setNewAccPass("");
+        setNewAccName("");
+        load();
+      } else {
+        setNewAccMessage({ text: "Gagal: " + json.error, type: "error" });
+      }
+    } catch (err: any) {
+      setNewAccMessage({ text: "Gagal: " + err.message, type: "error" });
+    } finally {
+      setNewAccLoading(false);
+    }
+  }
+
+  async function editAccountCredentials(p: Profile) {
+    const newEmail = prompt("Edit email member:", p.email);
+    if (newEmail === null) return;
+    const newPassword = prompt("Set password baru (kosongkan jika tidak ingin ganti):", "");
+    if (newPassword === null) return;
+
+    const res = await fetch("/api/admin/accounts", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile_id: p.id,
+        email: newEmail !== p.email ? newEmail : undefined,
+        password: newPassword ? newPassword : undefined,
+      }),
+    });
+    const json = await res.json();
+    if (!json.success) return alert("Gagal: " + json.error);
+    alert("Kredensial berhasil diperbarui.");
+    load();
   }
 
   async function confirmInvoice(inv: Invoice) {
@@ -272,6 +341,10 @@ export default function AdminPage() {
     }
   }
 
+  if (!checkedSession) {
+    return null;
+  }
+
   if (!authed) {
     return (
       <div className="min-h-screen max-w-md mx-auto flex flex-col justify-center px-6">
@@ -307,9 +380,17 @@ export default function AdminPage() {
     <div className="min-h-screen max-w-3xl mx-auto px-5 py-8">
       <div className="flex items-center justify-between mb-6">
         <h1 className="font-display font-bold text-white text-xl uppercase">Admin Panel</h1>
-        <button onClick={load} className="text-cyan-300 flex items-center gap-1.5 text-xs">
-          <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh
-        </button>
+        <div className="flex items-center gap-4">
+          <Link href="/admin/leaderboard" className="text-yellow-400 flex items-center gap-1.5 text-xs">
+            <Trophy size={14} /> Leaderboard
+          </Link>
+          <button onClick={load} className="text-cyan-300 flex items-center gap-1.5 text-xs">
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh
+          </button>
+          <button onClick={handleLogout} className="text-white/40 hover:text-red-400 text-xs">
+            Logout
+          </button>
+        </div>
       </div>
 
       <h2 className="text-white/70 text-sm font-bold mb-3 tracking-wide">
@@ -373,6 +454,63 @@ export default function AdminPage() {
       </div>
 
       <h2 className="text-white/70 text-sm font-bold mb-3 tracking-wide">
+        [ TAMBAH AKUN MANUAL — LANGSUNG AKTIF, TANPA OTP ]
+      </h2>
+      <div className="border border-cyan-400/20 chamfer-sm bg-[#0b0f18]/70 mb-8 p-4">
+        <p className="text-[10.5px] text-white/40 mb-3 leading-relaxed">
+          Buat akun member baru secara langsung — email otomatis terverifikasi (tidak perlu OTP), member bisa langsung login pakai email &amp; password yang kamu set di sini.
+        </p>
+        <form onSubmit={handleCreateAccount} className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input
+              type="text"
+              required
+              placeholder="USERNAME / NAMA"
+              value={newAccName}
+              onChange={(e) => setNewAccName(e.target.value)}
+              className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm"
+            />
+            <input
+              type="email"
+              required
+              placeholder="EMAIL"
+              value={newAccEmail}
+              onChange={(e) => setNewAccEmail(e.target.value)}
+              className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm"
+            />
+            <input
+              type="text"
+              required
+              placeholder="PASSWORD (min. 6 karakter)"
+              value={newAccPass}
+              onChange={(e) => setNewAccPass(e.target.value)}
+              className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm"
+            />
+          </div>
+
+          {newAccMessage && (
+            <div
+              className={`text-xs font-mono font-bold ${
+                newAccMessage.type === "success" ? "text-emerald-400" : "text-red-400"
+              }`}
+            >
+              [ {newAccMessage.text} ]
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={newAccLoading}
+              className="chamfer-btn bg-cyan-400 text-black font-bold text-xs tracking-wider px-4 py-2 hover:bg-cyan-300 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+            >
+              <UserPlus size={14} /> {newAccLoading ? "MEMBUAT..." : "BUAT AKUN"}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <h2 className="text-white/70 text-sm font-bold mb-3 tracking-wide">
         [ MEMBERS — EXPIRING SOON FIRST ]
       </h2>
       <div className="border border-cyan-400/20 chamfer-sm bg-[#0b0f18]/70 overflow-x-auto mb-8">
@@ -433,6 +571,13 @@ export default function AdminPage() {
                         className="text-yellow-400 hover:text-yellow-300 flex items-center gap-0.5 text-[11px]"
                       >
                         <BarChart3 size={13} /> Leaderboard
+                      </button>
+                      <button
+                        onClick={() => editAccountCredentials(p)}
+                        title="Set email / username / password akun ini secara langsung"
+                        className="text-fuchsia-400 hover:text-fuchsia-300 flex items-center gap-0.5 text-[11px]"
+                      >
+                        <KeyRound size={13} /> Akun
                       </button>
                       <button
                         onClick={() => handleResetStats(p)}
