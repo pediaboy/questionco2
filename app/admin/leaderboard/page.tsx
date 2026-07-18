@@ -11,6 +11,8 @@ type Entry = {
   full_name: string | null;
   is_dummy: boolean;
   auto_growth: boolean;
+  broker_registered: boolean;
+  total_lot: number | null;
   profit_pips: number | null;
   win_rate: number | null;
   total_trade: number | null;
@@ -27,6 +29,7 @@ export default function LeaderboardAdminPage() {
 
   // Dummy account form
   const [dName, setDName] = useState("");
+  const [dLot, setDLot] = useState("0");
   const [dPips, setDPips] = useState("0");
   const [dWinRate, setDWinRate] = useState("70");
   const [dTrades, setDTrades] = useState("0");
@@ -58,6 +61,7 @@ export default function LeaderboardAdminPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           full_name: dName,
+          total_lot: Number(dLot),
           profit_pips: Number(dPips),
           win_rate: Number(dWinRate),
           total_trade: Number(dTrades),
@@ -67,6 +71,7 @@ export default function LeaderboardAdminPage() {
       const json = await res.json();
       if (!json.success) return alert("Gagal: " + json.error);
       setDName("");
+      setDLot("0");
       setDPips("0");
       setDWinRate("70");
       setDTrades("0");
@@ -80,6 +85,8 @@ export default function LeaderboardAdminPage() {
   async function editEntry(entry: Entry) {
     const name = prompt("Nama tampilan:", entry.full_name || "");
     if (name === null) return;
+    const lot = prompt("Total Lot (kontes):", (entry.total_lot ?? 0).toString());
+    if (lot === null) return;
     const pips = prompt("Profit / Loss (pips):", (entry.profit_pips ?? 0).toString());
     if (pips === null) return;
     const winRate = prompt("Win Rate (%):", (entry.win_rate ?? 0).toString());
@@ -93,10 +100,22 @@ export default function LeaderboardAdminPage() {
       body: JSON.stringify({
         id: entry.id,
         full_name: name,
+        total_lot: Number(lot),
         profit_pips: Number(pips),
         win_rate: Number(winRate),
         total_trade: Number(trades),
       }),
+    });
+    const json = await res.json();
+    if (!json.success) return alert("Gagal: " + json.error);
+    load();
+  }
+
+  async function toggleBrokerRegistered(entry: Entry) {
+    const res = await fetch("/api/admin/leaderboard", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: entry.id, broker_registered: !entry.broker_registered }),
     });
     const json = await res.json();
     if (!json.success) return alert("Gagal: " + json.error);
@@ -197,13 +216,20 @@ export default function LeaderboardAdminPage() {
           <Bot size={14} className="text-cyan-300" /> Tambah Akun Dummy
         </h2>
         <form onSubmit={handleCreateDummy} className="space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
             <input
               required
               placeholder="NAMA TAMPILAN"
               value={dName}
               onChange={(e) => setDName(e.target.value)}
               className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm md:col-span-1"
+            />
+            <input
+              type="number"
+              placeholder="LOT AWAL"
+              value={dLot}
+              onChange={(e) => setDLot(e.target.value)}
+              className="w-full bg-[#05080f] border border-amber-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-amber-400/70 rounded-sm font-mono"
             />
             <input
               type="number"
@@ -257,9 +283,11 @@ export default function LeaderboardAdminPage() {
               <th className="p-3">#</th>
               <th className="p-3">Nama / Email</th>
               <th className="p-3">Tipe</th>
+              <th className="p-3">Lot</th>
               <th className="p-3">Pips</th>
               <th className="p-3">Win Rate</th>
               <th className="p-3">Trade</th>
+              <th className="p-3">Broker</th>
               <th className="p-3">Auto</th>
               <th className="p-3">Aksi</th>
             </tr>
@@ -283,6 +311,7 @@ export default function LeaderboardAdminPage() {
                     </span>
                   )}
                 </td>
+                <td className="p-3 font-mono font-bold text-amber-400">{entry.total_lot ?? 0}</td>
                 <td className="p-3 font-mono">
                   <span className={(entry.profit_pips ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}>
                     {(entry.profit_pips ?? 0) >= 0 ? "+" : ""}
@@ -291,6 +320,22 @@ export default function LeaderboardAdminPage() {
                 </td>
                 <td className="p-3 font-mono text-cyan-300">{entry.win_rate ?? 0}%</td>
                 <td className="p-3 font-mono text-white/60">{entry.total_trade ?? 0}</td>
+                <td className="p-3">
+                  {entry.is_dummy ? (
+                    <span className="text-white/20 text-[10px]">-</span>
+                  ) : (
+                    <button
+                      onClick={() => toggleBrokerRegistered(entry)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono border ${
+                        entry.broker_registered
+                          ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400"
+                          : "bg-white/5 border-white/20 text-white/40"
+                      }`}
+                    >
+                      {entry.broker_registered ? "YA" : "BELUM"}
+                    </button>
+                  )}
+                </td>
                 <td className="p-3">
                   <button
                     onClick={() => toggleAutoGrowth(entry)}
@@ -325,7 +370,7 @@ export default function LeaderboardAdminPage() {
             ))}
             {entries.length === 0 && (
               <tr>
-                <td colSpan={8} className="p-4 text-center text-white/30">
+                <td colSpan={10} className="p-4 text-center text-white/30">
                   Belum ada data leaderboard
                 </td>
               </tr>

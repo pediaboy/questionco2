@@ -9,9 +9,10 @@ function randomBetween(min: number, max: number) {
   return Math.random() * (max - min) + min;
 }
 
-// Runs on a schedule (Mon-Fri, market hours). Applies a small random pips move to every
-// leaderboard entry flagged auto_growth=true, so the leaderboard feels "alive" like a
-// real running competition. Weekends are skipped entirely (forex market closed).
+// Runs on a schedule (Mon-Fri, market hours). Grows the "Kontes Capai Lot" total_lot
+// (trading volume never decreases, so this is always additive) plus a small pips/win-rate
+// move, for every leaderboard entry flagged auto_growth=true — keeps the lot contest feeling
+// like a real, live competition. Weekends are skipped entirely (forex market closed).
 export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-cron-secret");
   if (secret !== CRON_SECRET) {
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest) {
 
   const { data: entries, error } = await admin
     .from("qco2_profiles")
-    .select("id, profit_pips, win_rate, total_trade")
+    .select("id, profit_pips, win_rate, total_trade, total_lot")
     .eq("auto_growth", true);
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -38,6 +39,10 @@ export async function POST(req: NextRequest) {
   }
 
   const updates = entries.map(async (e) => {
+    // Lot volume only ever accumulates (real trading volume never "un-trades").
+    const lotDelta = randomBetween(3, 26);
+    const nextLot = Math.round((Number(e.total_lot ?? 0) + lotDelta) * 100) / 100;
+
     // Mostly-positive random pip move — occasional small pullback for realism.
     const delta = Math.random() < 0.78 ? randomBetween(4, 38) : -randomBetween(2, 14);
     const nextPips = Math.round((Number(e.profit_pips ?? 0) + delta) * 10) / 10;
@@ -52,6 +57,7 @@ export async function POST(req: NextRequest) {
     return admin
       .from("qco2_profiles")
       .update({
+        total_lot: nextLot,
         profit_pips: nextPips,
         win_rate: nextWinRate,
         total_trade: nextTotalTrade,

@@ -29,7 +29,7 @@ interface SignalItem {
 
 interface LeaderboardItem {
   name: string;
-  profit_pips: number;
+  total_lot: number;
 }
 
 const RESULT_TAGS = ["+100 pips \u00b7 TP2 HIT", "+65 pips \u00b7 TP1 HIT", "+140 pips \u00b7 CLOSED PROFIT", "+85 pips \u00b7 TP1 HIT"];
@@ -184,7 +184,7 @@ export default function TrackRecordSection() {
       {/* Leaderboard sneak peek */}
       <div>
         <p className="text-[10px] tracking-[0.2em] text-slate-500 font-mono mb-2 uppercase">
-          [ Top Performer Bulan Ini ]
+          [ Kontes Capai Lot &mdash; Top Trader ]
         </p>
         {leadersLoading ? (
           <div className="space-y-2">
@@ -209,7 +209,7 @@ export default function TrackRecordSection() {
                   </span>
                   <span className="text-white/80 text-[12px] font-mono">{l.name}</span>
                 </div>
-                <span className="text-emerald-400 font-mono font-bold text-[12px]">+{l.profit_pips}</span>
+                <span className="text-emerald-400 font-mono font-bold text-[12px]">{l.total_lot.toLocaleString("id-ID")} Lot</span>
               </div>
             ))}
           </div>

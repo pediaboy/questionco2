@@ -3,13 +3,15 @@ import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const dynamic = "force-dynamic";
 
-// GET: full leaderboard, ranked by profit_pips desc — includes real + dummy accounts.
+// GET: full leaderboard, ranked by total_lot desc (Kontes Capai Lot) — includes real + dummy accounts.
 export async function GET() {
   const admin = getSupabaseAdmin();
   const { data, error } = await admin
     .from("qco2_profiles")
-    .select("id, email, full_name, is_dummy, auto_growth, profit_pips, win_rate, total_trade, role")
-    .order("profit_pips", { ascending: false });
+    .select(
+      "id, email, full_name, is_dummy, auto_growth, broker_registered, total_lot, profit_pips, win_rate, total_trade, role"
+    )
+    .order("total_lot", { ascending: false });
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   return NextResponse.json({ success: true, entries: data });
@@ -20,6 +22,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const full_name = (body.full_name || "").trim();
+    const total_lot = Number(body.total_lot ?? 0);
     const profit_pips = Number(body.profit_pips ?? 0);
     const win_rate = Number(body.win_rate ?? 0);
     const total_trade = Number(body.total_trade ?? 0);
@@ -41,6 +44,7 @@ export async function POST(req: NextRequest) {
         role: "free_member",
         is_dummy: true,
         auto_growth,
+        total_lot,
         profit_pips,
         win_rate,
         total_trade,
@@ -58,27 +62,31 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// PATCH: edit a leaderboard entry's stats / name / auto_growth toggle (dummy or real).
+// PATCH: edit a leaderboard entry's stats / name / auto_growth / broker_registered toggle (dummy or real).
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, full_name, profit_pips, win_rate, total_trade, auto_growth } = body as {
+    const { id, full_name, total_lot, profit_pips, win_rate, total_trade, auto_growth, broker_registered } = body as {
       id?: string;
       full_name?: string;
+      total_lot?: number;
       profit_pips?: number;
       win_rate?: number;
       total_trade?: number;
       auto_growth?: boolean;
+      broker_registered?: boolean;
     };
 
     if (!id) return NextResponse.json({ success: false, error: "Missing id" }, { status: 400 });
 
     const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (full_name !== undefined) update.full_name = full_name;
+    if (total_lot !== undefined) update.total_lot = total_lot;
     if (profit_pips !== undefined) update.profit_pips = profit_pips;
     if (win_rate !== undefined) update.win_rate = win_rate;
     if (total_trade !== undefined) update.total_trade = total_trade;
     if (auto_growth !== undefined) update.auto_growth = auto_growth;
+    if (broker_registered !== undefined) update.broker_registered = broker_registered;
 
     const admin = getSupabaseAdmin();
     const { data, error } = await admin

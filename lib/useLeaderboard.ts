@@ -5,9 +5,12 @@ import { syncEmitter } from "./syncEmitter";
 
 interface LeaderboardItem {
   name: string;
-  profit_pips: number;
+  total_lot: number;
   win_rate: number;
   total_trade: number;
+  next_tier_lot: number | null;
+  next_tier_reward: string | null;
+  progress_percent: number;
 }
 
 const fetcher = async (url: string): Promise<LeaderboardItem[]> => {

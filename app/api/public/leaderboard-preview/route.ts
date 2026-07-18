@@ -16,8 +16,9 @@ export async function GET() {
   const admin = getSupabaseAdmin();
   const { data, error } = await admin
     .from("qco2_profiles")
-    .select("email, full_name, profit_pips")
-    .order("profit_pips", { ascending: false })
+    .select("email, full_name, total_lot")
+    .or("is_dummy.eq.true,broker_registered.eq.true")
+    .order("total_lot", { ascending: false })
     .limit(3);
 
   if (error) return NextResponse.json({ success: false, message: error.message }, { status: 500 });
@@ -26,7 +27,7 @@ export async function GET() {
     const rawName = p.full_name || (p.email ? p.email.split("@")[0] : "Trader");
     return {
       name: censorName(rawName),
-      profit_pips: p.profit_pips ?? 0,
+      total_lot: p.total_lot ?? 0,
     };
   });
 
