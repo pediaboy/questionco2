@@ -59,18 +59,33 @@ export default function AdminPage() {
   const [annBody, setAnnBody] = useState("");
   const [annPinned, setAnnPinned] = useState(false);
 
+  // Global Stats State
+  const [winRate, setWinRate] = useState<string>("");
+  const [totalTrade, setTotalTrade] = useState<string>("");
+  const [profitPips, setProfitPips] = useState<string>("");
+  const [kelasCompleted, setKelasCompleted] = useState<string>("");
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsMessage, setStatsMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
-    const [invRes, profRes, qmRes, annRes] = await Promise.all([
+    const [invRes, profRes, qmRes, annRes, statsRes] = await Promise.all([
       fetch("/api/admin/invoices").then((r) => r.json()),
       fetch("/api/admin/profiles").then((r) => r.json()),
       fetch("/api/admin/quick-menu").then((r) => r.json().catch(() => ({ success: false, items: [] }))),
       fetch("/api/admin/announcements").then((r) => r.json().catch(() => ({ success: false, items: [] }))),
+      fetch("/api/admin/global-stats").then((r) => r.json().catch(() => ({ success: false, stats: null }))),
     ]);
     if (invRes.success) setInvoices(invRes.invoices);
     if (profRes.success) setProfiles(profRes.profiles);
     if (qmRes.success) setQuickMenuItems(qmRes.items);
     if (annRes.success) setAnnouncements(annRes.items);
+    if (statsRes.success && statsRes.stats) {
+      setWinRate(statsRes.stats.win_rate?.toString() ?? "");
+      setTotalTrade(statsRes.stats.total_trade?.toString() ?? "");
+      setProfitPips(statsRes.stats.profit_pips?.toString() ?? "");
+      setKelasCompleted(statsRes.stats.kelas_completed?.toString() ?? "");
+    }
     setLoading(false);
   }, []);
 
@@ -186,6 +201,40 @@ export default function AdminPage() {
     setAnnBody("");
     setAnnPinned(false);
     load();
+  }
+
+  async function handleUpdateStats(e: React.FormEvent) {
+    e.preventDefault();
+    setStatsLoading(true);
+    setStatsMessage(null);
+    try {
+      const res = await fetch("/api/admin/global-stats", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          win_rate: winRate === "" ? null : Number(winRate),
+          total_trade: totalTrade === "" ? null : Number(totalTrade),
+          profit_pips: profitPips === "" ? null : Number(profitPips),
+          kelas_completed: kelasCompleted === "" ? null : Number(kelasCompleted),
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setStatsMessage({ text: "Statistik global berhasil diperbarui!", type: "success" });
+        if (json.stats) {
+          setWinRate(json.stats.win_rate?.toString() ?? "");
+          setTotalTrade(json.stats.total_trade?.toString() ?? "");
+          setProfitPips(json.stats.profit_pips?.toString() ?? "");
+          setKelasCompleted(json.stats.kelas_completed?.toString() ?? "");
+        }
+      } else {
+        setStatsMessage({ text: "Gagal: " + (json.message || "Unknown error"), type: "error" });
+      }
+    } catch (err: any) {
+      setStatsMessage({ text: "Gagal: " + err.message, type: "error" });
+    } finally {
+      setStatsLoading(false);
+    }
   }
 
   if (!authed) {
@@ -488,6 +537,89 @@ export default function AdminPage() {
             </div>
           </form>
         </div>
+      </div>
+
+      <h2 className="text-white/70 text-sm font-bold mb-3 tracking-wide">
+        [ STATISTIK GLOBAL ]
+      </h2>
+      <div className="border border-cyan-400/20 chamfer-sm bg-[#0b0f18]/70 mb-8 p-4">
+        <form onSubmit={handleUpdateStats} className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[10px] text-cyan-300 font-bold tracking-wider font-mono mb-1 uppercase">
+                Win Rate (%)
+              </label>
+              <input
+                type="number"
+                step="any"
+                required
+                placeholder="WIN RATE"
+                value={winRate}
+                onChange={(e) => setWinRate(e.target.value)}
+                className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] text-cyan-300 font-bold tracking-wider font-mono mb-1 uppercase">
+                Total Trade
+              </label>
+              <input
+                type="number"
+                required
+                placeholder="TOTAL TRADE"
+                value={totalTrade}
+                onChange={(e) => setTotalTrade(e.target.value)}
+                className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] text-cyan-300 font-bold tracking-wider font-mono mb-1 uppercase">
+                Profit / Loss (pips)
+              </label>
+              <input
+                type="number"
+                required
+                placeholder="PROFIT / LOSS (PIPS)"
+                value={profitPips}
+                onChange={(e) => setProfitPips(e.target.value)}
+                className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] text-cyan-300 font-bold tracking-wider font-mono mb-1 uppercase">
+                Kelas Selesai
+              </label>
+              <input
+                type="number"
+                required
+                placeholder="KELAS SELESAI"
+                value={kelasCompleted}
+                onChange={(e) => setKelasCompleted(e.target.value)}
+                className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm font-mono"
+              />
+            </div>
+          </div>
+
+          {statsMessage && (
+            <div
+              className={`text-xs font-mono font-bold ${
+                statsMessage.type === "success" ? "text-emerald-400" : "text-red-400"
+              }`}
+            >
+              [ {statsMessage.text} ]
+            </div>
+          )}
+
+          <div className="flex justify-end pt-2">
+            <button
+              type="submit"
+              disabled={statsLoading}
+              className="chamfer-btn bg-cyan-400 text-black font-bold text-xs tracking-wider px-4 py-2 hover:bg-cyan-300 disabled:opacity-50 transition-colors"
+            >
+              {statsLoading ? "UPDATING..." : "[ UPDATE STATS ]"}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

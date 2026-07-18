@@ -3,10 +3,16 @@
 import React from "react";
 import { Trophy, LineChart, TrendingUp, TrendingDown, GraduationCap } from "lucide-react";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
-import { MemberProfile } from "@/lib/MemberAuthContext";
+
+interface HeroStatsData {
+  win_rate: number;
+  total_trade: number;
+  profit_pips: number;
+  kelas_completed: number;
+}
 
 interface MemberHeroStatsProps {
-  profile: MemberProfile;
+  profile: HeroStatsData;
 }
 
 export default function MemberHeroStats({ profile }: MemberHeroStatsProps) {

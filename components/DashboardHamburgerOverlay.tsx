@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { supabase } from "@/lib/supabaseClient";
+import { useMemberAuth } from "@/lib/MemberAuthContext";
 
 interface DashboardHamburgerOverlayProps {
   open: boolean;
@@ -16,6 +17,8 @@ export default function DashboardHamburgerOverlay({
   onClose,
 }: DashboardHamburgerOverlayProps) {
   const router = useRouter();
+  const { profile } = useMemberAuth();
+  const isVip = profile?.is_vip || false;
 
   const handleLogout = async () => {
     if (confirm("Apakah Anda yakin ingin keluar dari akun?")) {
@@ -26,10 +29,12 @@ export default function DashboardHamburgerOverlay({
   };
 
   const menuItems = [
-    { label: "[ PENGATURAN AKUN ]", href: "/dashboard/profil" },
-    { label: "[ INVOICE & SUBSCRIPTION ]", href: "/dashboard/invoice" },
-    { label: "[ NOTIFIKASI SISTEM ]", href: "/dashboard/notifikasi" },
-    { label: "[ SUPPORT TICKET ]", href: "/dashboard/support" },
+    { label: "[ PROFIL & KEAMANAN ]", href: "/dashboard/profil" },
+    { label: "[ STATUS LANGGANAN ]", href: "/dashboard/status-langganan" },
+    { label: "[ RIWAYAT TRANSAKSI ]", href: "/dashboard/invoice" },
+    { label: "[ PENGATURAN NOTIFIKASI ]", href: "/dashboard/pengaturan-notifikasi" },
+    { label: "[ TICKET SUPPORT ]", href: "/dashboard/support" },
+    { label: "[ KOMUNITAS VIP ]", href: "/dashboard/komunitas-vip", isVipOnly: true },
   ];
 
   return (
@@ -70,23 +75,49 @@ export default function DashboardHamburgerOverlay({
 
             {/* Menu Items list */}
             <nav className="flex-1 flex flex-col gap-6 text-left">
-              {menuItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={onClose}
-                  className="font-mono text-[13px] tracking-wider text-slate-300 hover:text-cyan-300 transition-colors block w-fit"
-                >
-                  {item.label}
-                </Link>
-              ))}
+              {menuItems.map((item) => {
+                if (item.isVipOnly) {
+                  if (isVip) {
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        onClick={onClose}
+                        className="font-mono text-[13px] tracking-wider text-slate-300 hover:text-cyan-300 transition-colors block w-fit"
+                      >
+                        {item.label}
+                      </Link>
+                    );
+                  } else {
+                    return (
+                      <div
+                        key={item.href}
+                        className="font-mono text-[13px] tracking-wider text-slate-600 cursor-not-allowed block w-fit select-none"
+                        title="Khusus Anggota VIP"
+                      >
+                        {item.label} <span className="text-[10px] text-slate-600 font-sans italic ml-1">(khusus VIP)</span>
+                      </div>
+                    );
+                  }
+                }
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={onClose}
+                    className="font-mono text-[13px] tracking-wider text-slate-300 hover:text-cyan-300 transition-colors block w-fit"
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
 
               {/* Logout button */}
               <button
                 onClick={handleLogout}
                 className="font-mono text-[13px] tracking-wider text-red-500 hover:text-red-400 transition-colors text-left block w-fit"
               >
-                [ LOGOUT / DISCONNECT ]
+                [ SYSTEM LOGOUT ]
               </button>
             </nav>
 

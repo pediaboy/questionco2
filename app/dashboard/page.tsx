@@ -3,19 +3,24 @@
 import React from "react";
 import Link from "next/link";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
-import { useMemberStats } from "@/lib/useMemberStats";
+import { useGlobalStats } from "@/lib/useGlobalStats";
 import MemberHeroStats from "@/components/MemberHeroStats";
 import QuickMenuGrid from "@/components/QuickMenuGrid";
 
 export default function MemberDashboard() {
-  const { profile: authProfile } = useMemberAuth();
-  const { profile: statsProfile } = useMemberStats();
+  const { profile } = useMemberAuth();
+  const { stats } = useGlobalStats();
 
-  if (!authProfile) return null;
+  if (!profile) return null;
 
-  // Use live stats profile if loaded, otherwise fall back to auth profile
-  const displayProfile = statsProfile || authProfile;
-  const displayName = displayProfile.full_name || displayProfile.email.split("@")[0];
+  const displayName = profile.full_name || profile.email.split("@")[0];
+
+  const heroStats = stats || {
+    win_rate: profile.win_rate,
+    total_trade: profile.total_trade,
+    profit_pips: profile.profit_pips,
+    kelas_completed: profile.kelas_completed,
+  };
 
   return (
     <div>
@@ -29,16 +34,16 @@ export default function MemberDashboard() {
         </h2>
       </div>
 
-      {/* Hero Stats */}
-      <MemberHeroStats profile={displayProfile} />
+      {/* Hero Stats (global community stats, synced every 5s) */}
+      <MemberHeroStats profile={heroStats} />
 
       {/* Quick Menu Grid */}
       <QuickMenuGrid />
 
       {/* VIP Upsell Banner (if not already VIP) */}
-      {!displayProfile.is_vip && (
+      {!profile.is_vip && (
         <Link
-          href="/vip"
+          href="/dashboard/upgrade"
           className="block my-6 chamfer-sm p-4 border border-[#FFD700]/30 bg-gradient-to-r from-amber-950/20 to-black relative overflow-hidden group active:border-[#FFD700]/80 transition-all duration-200"
         >
           {/* Tactical Corner Accents */}
