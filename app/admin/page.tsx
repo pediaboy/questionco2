@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { ShieldCheck, RefreshCw, Check, X, RotateCcw, Edit2, Trash2 } from "lucide-react";
+import { ShieldCheck, RefreshCw, Check, X, RotateCcw, Edit2, Trash2, BarChart3 } from "lucide-react";
 
 type Invoice = {
   id: string;
@@ -19,6 +19,9 @@ type Profile = {
   role: string;
   tier: string | null;
   expired_at: string | null;
+  profit_pips?: number | null;
+  win_rate?: number | null;
+  total_trade?: number | null;
 };
 
 type QuickMenuItem = {
@@ -145,6 +148,38 @@ export default function AdminPage() {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: p.id, reset_stats: true }),
+    });
+    const json = await res.json();
+    if (!json.success) return alert("Gagal: " + json.error);
+    load();
+  }
+
+  async function editLeaderboardStats(p: Profile) {
+    const profitInput = prompt(
+      `Edit Profit/Loss (pips) untuk ${p.email}:`,
+      (p.profit_pips ?? 0).toString()
+    );
+    if (profitInput === null) return; // cancelled
+    const winRateInput = prompt(
+      `Edit Win Rate (%) untuk ${p.email}:`,
+      (p.win_rate ?? 0).toString()
+    );
+    if (winRateInput === null) return;
+    const totalTradeInput = prompt(
+      `Edit Total Trade untuk ${p.email}:`,
+      (p.total_trade ?? 0).toString()
+    );
+    if (totalTradeInput === null) return;
+
+    const res = await fetch("/api/admin/profiles", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: p.id,
+        profit_pips: Number(profitInput),
+        win_rate: Number(winRateInput),
+        total_trade: Number(totalTradeInput),
+      }),
     });
     const json = await res.json();
     if (!json.success) return alert("Gagal: " + json.error);
@@ -349,6 +384,9 @@ export default function AdminPage() {
               <th className="p-3">Tier</th>
               <th className="p-3">Expired</th>
               <th className="p-3">Sisa Hari</th>
+              <th className="p-3">Pips</th>
+              <th className="p-3">Win Rate</th>
+              <th className="p-3">Trade</th>
               <th className="p-3">Aksi</th>
             </tr>
           </thead>
@@ -376,10 +414,25 @@ export default function AdminPage() {
                       "-"
                     )}
                   </td>
+                  <td className="p-3 font-mono">
+                    <span className={(p.profit_pips ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"}>
+                      {(p.profit_pips ?? 0) >= 0 ? "+" : ""}
+                      {p.profit_pips ?? 0}
+                    </span>
+                  </td>
+                  <td className="p-3 font-mono text-cyan-300">{p.win_rate ?? 0}%</td>
+                  <td className="p-3 font-mono text-white/60">{p.total_trade ?? 0}</td>
                   <td className="p-3">
                     <div className="flex items-center gap-3">
                       <button onClick={() => overrideExtend(p)} className="text-cyan-300 underline text-[11px]">
                         Extend
+                      </button>
+                      <button
+                        onClick={() => editLeaderboardStats(p)}
+                        title="Edit statistik leaderboard (Profit Pips / Win Rate / Total Trade)"
+                        className="text-yellow-400 hover:text-yellow-300 flex items-center gap-0.5 text-[11px]"
+                      >
+                        <BarChart3 size={13} /> Leaderboard
                       </button>
                       <button
                         onClick={() => handleResetStats(p)}
@@ -395,7 +448,7 @@ export default function AdminPage() {
             })}
             {profiles.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-4 text-center text-white/30">
+                <td colSpan={9} className="p-4 text-center text-white/30">
                   Belum ada member
                 </td>
               </tr>

@@ -72,7 +72,7 @@ function TradingViewWidget({ symbol }: { symbol: string }) {
     containerRef.current.innerHTML = "";
 
     const widgetContainer = document.createElement("div");
-    widgetContainer.id = "tradingview-widget-inner";
+    widgetContainer.className = "tradingview-widget-container__widget";
     widgetContainer.style.height = "100%";
     widgetContainer.style.width = "100%";
     containerRef.current.appendChild(widgetContainer);
