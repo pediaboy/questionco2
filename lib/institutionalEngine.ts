@@ -16,6 +16,7 @@
 
 import type { Candle } from "./signalEngine";
 import { ema, vwap as vwapSeries } from "./signalEngine";
+import { inKillZone } from "./marketSessions";
 
 export type Direction = "BUY" | "SELL";
 
@@ -265,15 +266,6 @@ function premiumDiscountZone(price: number, swings: Swing[]): "premium" | "disco
   return "equilibrium";
 }
 
-// ---------- kill zone (ICT London / New York, UTC-based) ----------
-
-export function inKillZone(now: Date = new Date()): boolean {
-  const h = now.getUTCHours();
-  const inLondon = h >= 7 && h < 10; // 07:00-10:00 UTC = 14:00-17:00 WIB
-  const inNewYork = h >= 12 && h < 15; // 12:00-15:00 UTC = 19:00-22:00 WIB
-  return inLondon || inNewYork;
-}
-
 // ---------- main evaluator ----------
 
 const RSI_BUY_MIN = 55;
@@ -297,7 +289,7 @@ export function evaluateInstitutional(m5: Candle[], m1: Candle[], newsBlackout: 
   });
 
   if (newsBlackout) return empty("News blackout aktif (high-impact news dalam 30 menit)");
-  if (!inKillZone()) return empty("Diluar London/New York Kill Zone");
+  if (!inKillZone()) return empty("Diluar semua sesi trading (seharusnya tidak pernah terjadi — 4 sesi menutupi 24 jam penuh)");
   if (m5.length < 220 || m1.length < 30) return empty("insufficient_data");
 
   const closes = m5.map((c) => c.close);

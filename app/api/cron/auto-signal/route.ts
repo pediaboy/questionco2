@@ -3,8 +3,11 @@ import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { fetchOkxCandles, fetchOkxLastPrice } from "@/lib/signalEngine";
 import { evaluateInstitutional } from "@/lib/institutionalEngine";
 import { isNewsBlackout } from "@/lib/newsFilter";
+import { getActiveSessions } from "@/lib/marketSessions";
 import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
 import { sendTelegramMessage } from "@/lib/telegram";
+import { sendToChannel } from "@/lib/telegramApi";
+import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
 
 export const dynamic = "force-dynamic";
 
@@ -92,6 +95,38 @@ function buildBEMessage(pair: PairConfig, threshold: number, pipsRunning: number
 
 function buildTimeoutMessage() {
   return `⏳ <b>TIMEOUT 60 MENIT</b>\n━━━━━━━━━━━━━━━━\n\nRonde belum mencapai target.\n🔓 Slot signal baru sudah terbuka.\n\n📌 Tetap selektif — utamakan kualitas setup daripada kuantitas.`;
+}
+
+function buildSessionChangeMessage(opened: string[], closed: string[], active: string[]): string {
+  const lines: string[] = [`🌏 <b>PERGANTIAN SESI PASAR</b>`, `━━━━━━━━━━━━━━━━`, ``];
+  if (opened.length) lines.push(`🔔 Sesi dibuka: ${opened.join(", ")}`);
+  if (closed.length) lines.push(`🔕 Sesi ditutup: ${closed.join(", ")}`);
+  lines.push(``, `📊 Sesi aktif sekarang: ${active.length ? active.join(", ") : "-"}`);
+  lines.push(``, `Volatilitas &amp; likuiditas market bisa berubah — tetap disiplin dengan manajemen risiko.`);
+  return lines.join("\n");
+}
+
+async function checkSessionChange(admin: ReturnType<typeof getSupabaseAdmin>) {
+  const active = getActiveSessions().map((s) => s.label);
+
+  const { data: stateRow } = await admin.from("qco2_session_state").select("*").eq("id", "singleton").maybeSingle();
+
+  const previous: string[] = stateRow?.active_sessions || [];
+  const opened = active.filter((s) => !previous.includes(s));
+  const closed = previous.filter((s) => !active.includes(s));
+
+  if (opened.length === 0 && closed.length === 0) {
+    return { changed: false };
+  }
+
+  const text = buildSessionChangeMessage(opened, closed, active);
+  await Promise.all([sendToChannel(vipChannelId(), text), sendToChannel(publicChannelId(), text)]);
+
+  await admin
+    .from("qco2_session_state")
+    .upsert({ id: "singleton", active_sessions: active, updated_at: new Date().toISOString() });
+
+  return { changed: true, opened, closed, active };
 }
 
 async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabaseAdmin>, newsBlackout: boolean) {
@@ -249,7 +284,7 @@ export async function POST(req: NextRequest) {
   }
 
   const admin = getSupabaseAdmin();
-  const newsBlackout = await isNewsBlackout();
+  const [newsBlackout, sessionChange] = await Promise.all([isNewsBlackout(), checkSessionChange(admin)]);
   const results = [];
   for (const pair of SIGNAL_PAIRS) {
     try {
@@ -259,5 +294,5 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ success: true, news_blackout: newsBlackout, results });
+  return NextResponse.json({ success: true, news_blackout: newsBlackout, session_change: sessionChange, results });
 }
