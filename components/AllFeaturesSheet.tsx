@@ -37,6 +37,7 @@ const CATEGORIES: { title: string; items: FeatureItem[] }[] = [
     items: [
       { label: "Sinyal", href: "/dashboard/sinyal", icon: Radio, vipOnly: true },
       { label: "Chart", href: "/dashboard/chart", icon: LineChart },
+      { label: "Terminal", href: "/dashboard/terminal", icon: Activity, vipOnly: true },
       { label: "Analisa", href: "/analisa", icon: Newspaper },
     ],
   },
