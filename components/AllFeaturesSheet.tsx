@@ -20,6 +20,13 @@ import {
   Award,
   Activity,
   PieChart,
+  UserRound,
+  Settings as SettingsIcon,
+  Star,
+  Receipt,
+  ShieldCheck,
+  Gift,
+  Ticket,
 } from "lucide-react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import VipUpgradeModal from "./VipUpgradeModal";
@@ -66,6 +73,18 @@ const CATEGORIES: { title: string; items: FeatureItem[] }[] = [
       { label: "Kontes Lot", href: "/dashboard/kontes", icon: Gem },
       { label: "Pengumuman", href: "/dashboard/pengumuman", icon: Bell },
       { label: "Upgrade VIP", href: "/dashboard/upgrade", icon: Wallet },
+    ],
+  },
+  {
+    title: "AKUN",
+    items: [
+      { label: "Profil", href: "/profile", icon: UserRound },
+      { label: "Pengaturan", href: "/settings", icon: SettingsIcon },
+      { label: "Watchlist", href: "/watchlist", icon: Star },
+      { label: "Ledger", href: "/ledger", icon: Receipt },
+      { label: "Keamanan", href: "/security", icon: ShieldCheck },
+      { label: "Affiliate", href: "/affiliate", icon: Gift },
+      { label: "Tiket Bantuan", href: "/support-tickets", icon: Ticket },
     ],
   },
 ];

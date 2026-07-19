@@ -1,16 +1,105 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { UserRound } from "lucide-react";
+import {
+  Home,
+  Info,
+  Gift,
+  Newspaper,
+  BookOpen,
+  HelpCircle,
+  Mail,
+  Signal,
+  TrendingUp,
+  BarChart3,
+  Activity,
+  DollarSign,
+  Star,
+  Database,
+  Users,
+  GraduationCap,
+  Library,
+  MessageSquareQuote,
+  Rocket,
+  Code2,
+  FileText,
+  Send,
+  Handshake,
+  Building2,
+  ScrollText,
+  ShieldAlert,
+  AlertTriangle,
+} from "lucide-react";
 
-const MENU = [
-  { label: "Home", href: "/" },
-  { label: "Tentang", href: "/tentang" },
-  { label: "Gratis", href: "/gratis" },
-  { label: "Analisa", href: "/analisa" },
-  { label: "Blog", href: "/blog" },
-  { label: "FAQ", href: "/faq" },
-  { label: "Kontak", href: "/kontak" },
+interface MenuItem {
+  label: string;
+  href: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+}
+
+// Consolidated public navigation, grouped into categories so a large page
+// count stays scannable inside a single overlay menu (same "one consolidated
+// menu" principle used by the dashboard's AllFeaturesSheet).
+const GROUPS: { title: string; items: MenuItem[] }[] = [
+  {
+    title: "UTAMA",
+    items: [
+      { label: "Home", href: "/", icon: Home },
+      { label: "Tentang", href: "/tentang", icon: Info },
+      { label: "Analisa", href: "/analisa", icon: Newspaper },
+      { label: "Blog", href: "/blog", icon: BookOpen },
+      { label: "Gratis", href: "/gratis", icon: Gift },
+    ],
+  },
+  {
+    title: "SINYAL & DATA",
+    items: [
+      { label: "Sinyal", href: "/signals", icon: Signal },
+      { label: "Performance", href: "/performance", icon: TrendingUp },
+      { label: "Analytics", href: "/analytics", icon: BarChart3 },
+      { label: "Status Sistem", href: "/status", icon: Activity },
+      { label: "Data Sources", href: "/data-sources", icon: Database },
+    ],
+  },
+  {
+    title: "HARGA & FITUR",
+    items: [
+      { label: "Pricing", href: "/pricing", icon: DollarSign },
+      { label: "Features", href: "/features", icon: Star },
+      { label: "Affiliate", href: "/affiliate", icon: Gift },
+      { label: "Broker Integration", href: "/broker-integration", icon: Handshake },
+      { label: "Partners", href: "/partners", icon: Building2 },
+    ],
+  },
+  {
+    title: "KOMUNITAS & EDUKASI",
+    items: [
+      { label: "Community", href: "/community", icon: Users },
+      { label: "Learning Center", href: "/learning-center", icon: GraduationCap },
+      { label: "Strategy Library", href: "/strategy-library", icon: Library },
+      { label: "Testimonials", href: "/testimonials", icon: MessageSquareQuote },
+      { label: "Onboarding", href: "/onboarding", icon: Rocket },
+      { label: "Newsletter", href: "/newsletter", icon: Send },
+    ],
+  },
+  {
+    title: "DEVELOPER",
+    items: [
+      { label: "Developer Hub", href: "/developer-hub", icon: Code2 },
+      { label: "API Docs", href: "/api-docs", icon: FileText },
+    ],
+  },
+  {
+    title: "BANTUAN & LEGAL",
+    items: [
+      { label: "FAQ", href: "/faq", icon: HelpCircle },
+      { label: "Roadmap", href: "/roadmap", icon: Rocket },
+      { label: "Kontak", href: "/contact", icon: Mail },
+      { label: "Terms", href: "/terms", icon: ScrollText },
+      { label: "Disclaimer", href: "/disclaimer", icon: ShieldAlert },
+      { label: "Risk Disclosure", href: "/risk-disclosure", icon: AlertTriangle },
+    ],
+  },
 ];
 
 export default function HamburgerOverlay({
@@ -30,12 +119,12 @@ export default function HamburgerOverlay({
           transition={{ duration: 0.35, ease: "easeOut" }}
           className="fixed inset-0 z-[100] flex flex-col"
           style={{
-            background: "rgba(5, 8, 15, 0.85)",
+            background: "rgba(5, 8, 15, 0.92)",
             backdropFilter: "blur(12px)",
             WebkitBackdropFilter: "blur(12px)",
           }}
         >
-          <div className="flex items-center justify-between px-6 pt-6">
+          <div className="flex items-center justify-between px-6 pt-6 shrink-0">
             <span className="font-display font-bold text-white text-base">
               LASTQUESTION.CO<span className="text-cyan-300">.</span>
             </span>
@@ -53,24 +142,37 @@ export default function HamburgerOverlay({
             animate="open"
             exit="closed"
             variants={{
-              open: { transition: { staggerChildren: 0.05, delayChildren: 0.1 } },
+              open: { transition: { staggerChildren: 0.03, delayChildren: 0.08 } },
               closed: {},
             }}
-            className="flex-1 flex flex-col justify-center pl-6 gap-5"
+            className="flex-1 overflow-y-auto px-6 py-6 space-y-6"
           >
-            {MENU.map((item) => (
-              <motion.a
-                key={item.label}
-                href={item.href}
-                onClick={onClose}
-                variants={{
-                  closed: { opacity: 0, x: -14 },
-                  open: { opacity: 1, x: 0 },
-                }}
-                className="text-[16px] tracking-wide text-[#E2E8F0] font-medium hover:text-cyan-300 transition-colors w-fit"
-              >
-                {item.label}
-              </motion.a>
+            {GROUPS.map((group) => (
+              <div key={group.title}>
+                <span className="text-[10px] tracking-[0.2em] text-slate-500 font-mono block mb-2.5">
+                  [ {group.title} ]
+                </span>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <motion.a
+                        key={item.href}
+                        href={item.href}
+                        onClick={onClose}
+                        variants={{
+                          closed: { opacity: 0, x: -10 },
+                          open: { opacity: 1, x: 0 },
+                        }}
+                        className="flex items-center gap-2 text-[12.5px] tracking-wide text-[#E2E8F0] font-medium hover:text-cyan-300 transition-colors w-fit"
+                      >
+                        <Icon size={13} className="text-cyan-400/70 shrink-0" />
+                        {item.label}
+                      </motion.a>
+                    );
+                  })}
+                </div>
+              </div>
             ))}
 
             <motion.a
@@ -80,7 +182,7 @@ export default function HamburgerOverlay({
                 closed: { opacity: 0, x: -14 },
                 open: { opacity: 1, x: 0 },
               }}
-              className="flex items-center gap-2.5 w-fit mt-2"
+              className="flex items-center gap-2.5 w-fit pt-2"
             >
               <span
                 className="font-display font-bold text-[16px] tracking-wide"
@@ -98,18 +200,6 @@ export default function HamburgerOverlay({
               />
             </motion.a>
           </motion.nav>
-
-          <div className="border-t border-dashed border-cyan-400/40 px-6 py-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
-            <a
-              href="/login"
-              onClick={onClose}
-              className="chamfer-btn w-full flex items-center justify-center gap-2.5 bg-cyan-400 text-black font-bold text-[14px] tracking-wide py-3.5 active:brightness-150 transition-all"
-              style={{ fontFamily: "var(--font-display)" }}
-            >
-              <UserRound size={18} strokeWidth={2.2} />
-              Login / Daftar
-            </a>
-          </div>
         </motion.div>
       )}
     </AnimatePresence>
