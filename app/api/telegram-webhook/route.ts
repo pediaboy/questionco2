@@ -31,38 +31,45 @@ async function getSession(admin: ReturnType<typeof getSupabaseAdmin>, chatId: nu
 }
 
 async function saveSession(admin: ReturnType<typeof getSupabaseAdmin>, s: Session) {
-  await admin
-    .from("qco2_tg_admin_sessions")
-    .upsert({ ...s, updated_at: new Date().toISOString() });
+  await admin.from("qco2_tg_admin_sessions").upsert({ ...s, updated_at: new Date().toISOString() });
 }
 
-// ---------- panel renderers ----------
+function fmtDate(iso: string | null): string {
+  if (!iso) return "-";
+  return new Date(iso).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+}
+
+const BACK_BTN = { text: "🔙 Menu Utama", callback_data: "menu:main" };
+const CANCEL_BTN = { text: "❌ Batal", callback_data: "cancel" };
+
+// ---------- main menu ----------
 
 function mainMenuView(): { text: string; kb: InlineKeyboard } {
   return {
     text:
       "🎛 <b>LASTQUESTION.CO — ADMIN PANEL</b>\n━━━━━━━━━━━━━━━━\n\nSemua aksi di sini langsung sinkron ke web &amp; channel Telegram.\n\nPilih menu:",
     kb: [
-      [{ text: "📊 Buat Sinyal Manual", callback_data: "menu:signal" }],
+      [{ text: "📊 Sinyal Manual", callback_data: "menu:signal" }],
+      [{ text: "👥 Member VIP", callback_data: "menu:vip" }],
+      [{ text: "🧾 Invoice Masuk", callback_data: "menu:invoice" }],
+      [{ text: "📈 Statistik Global", callback_data: "menu:globalstats" }],
+      [{ text: "🏆 Tambah Lot Entry", callback_data: "menu:lot" }],
       [{ text: "📢 Broadcast Pengumuman", callback_data: "menu:broadcast" }],
-      [{ text: "📈 Statistik Cepat", callback_data: "menu:stats" }],
+      [{ text: "📊 Statistik Cepat", callback_data: "menu:stats" }],
       [{ text: "❌ Tutup Panel", callback_data: "menu:close" }],
     ],
   };
 }
 
+// ---------- signal wizard views ----------
+
 function pairStepView(): { text: string; kb: InlineKeyboard } {
   const rows: InlineKeyboard = [];
   for (let i = 0; i < SIGNAL_PAIR_OPTIONS.length; i += 2) {
-    rows.push(
-      SIGNAL_PAIR_OPTIONS.slice(i, i + 2).map((p) => ({ text: p, callback_data: `sig:pair:${p}` }))
-    );
+    rows.push(SIGNAL_PAIR_OPTIONS.slice(i, i + 2).map((p) => ({ text: p, callback_data: `sig:pair:${p}` })));
   }
-  rows.push([{ text: "❌ Batal", callback_data: "sig:cancel" }]);
-  return {
-    text: "📊 <b>BUAT SINYAL MANUAL</b>\n━━━━━━━━━━━━━━━━\n\nStep 1/6 — Pilih pair:",
-    kb: rows,
-  };
+  rows.push([CANCEL_BTN]);
+  return { text: "📊 <b>BUAT SINYAL MANUAL</b>\n━━━━━━━━━━━━━━━━\n\nStep 1/6 — Pilih pair:", kb: rows };
 }
 
 function directionStepView(pair: string): { text: string; kb: InlineKeyboard } {
@@ -73,25 +80,20 @@ function directionStepView(pair: string): { text: string; kb: InlineKeyboard } {
         { text: "🟢 BUY", callback_data: "sig:dir:BUY" },
         { text: "🔴 SELL", callback_data: "sig:dir:SELL" },
       ],
-      [{ text: "❌ Batal", callback_data: "sig:cancel" }],
+      [CANCEL_BTN],
     ],
   };
 }
 
 function textPromptView(header: string, stepLabel: string): { text: string; kb: InlineKeyboard } {
-  return {
-    text: `📊 <b>BUAT SINYAL MANUAL</b>\n━━━━━━━━━━━━━━━━\n\n${header}\n${stepLabel}`,
-    kb: [[{ text: "❌ Batal", callback_data: "sig:cancel" }]],
-  };
+  return { text: `📊 <b>BUAT SINYAL MANUAL</b>\n━━━━━━━━━━━━━━━━\n\n${header}\n${stepLabel}`, kb: [[CANCEL_BTN]] };
 }
 
 function tpMenuView(header: string, tpCount: number): { text: string; kb: InlineKeyboard } {
   const kb: InlineKeyboard = [];
-  if (tpCount < 4) {
-    kb.push([{ text: `➕ Tambah TP${tpCount + 1}`, callback_data: "sig:tp:add" }]);
-  }
+  if (tpCount < 4) kb.push([{ text: `➕ Tambah TP${tpCount + 1}`, callback_data: "sig:tp:add" }]);
   kb.push([{ text: "✅ Lanjut", callback_data: "sig:tp:done" }]);
-  kb.push([{ text: "❌ Batal", callback_data: "sig:cancel" }]);
+  kb.push([CANCEL_BTN]);
   return {
     text: `📊 <b>BUAT SINYAL MANUAL</b>\n━━━━━━━━━━━━━━━━\n\n${header}\n\nStep 5/6 — TP sudah ${tpCount}. Tambah lagi atau lanjut?`,
     kb,
@@ -104,7 +106,7 @@ function audienceStepView(header: string): { text: string; kb: InlineKeyboard } 
     kb: [
       [{ text: "🔒 VIP Only", callback_data: "sig:aud:vip" }],
       [{ text: "🌍 VIP + Publik", callback_data: "sig:aud:public" }],
-      [{ text: "❌ Batal", callback_data: "sig:cancel" }],
+      [CANCEL_BTN],
     ],
   };
 }
@@ -116,62 +118,173 @@ function confirmStepView(d: Record<string, any>): { text: string; kb: InlineKeyb
   return {
     text:
       `📊 <b>KONFIRMASI SINYAL</b>\n━━━━━━━━━━━━━━━━\n\n` +
-      `Pair    : <b>${d.pair}</b>\n` +
-      `Arah    : <b>${d.direction}</b>\n` +
-      `Entry   : <b>${d.entry}</b>\n` +
-      `SL      : <b>${d.sl}</b>\n` +
-      `${tpLines}\n` +
-      `Tujuan  : ${audienceLabel}\n\n` +
-      `Kirim sekarang?`,
+      `Pair    : <b>${d.pair}</b>\nArah    : <b>${d.direction}</b>\nEntry   : <b>${d.entry}</b>\nSL      : <b>${d.sl}</b>\n` +
+      `${tpLines}\nTujuan  : ${audienceLabel}\n\nKirim sekarang?`,
     kb: [
       [{ text: "✅ KIRIM SEKARANG", callback_data: "sig:confirm" }],
-      [{ text: "❌ Batalkan", callback_data: "sig:cancel" }],
+      [CANCEL_BTN],
     ],
   };
 }
 
 function broadcastTitlePromptView(): { text: string; kb: InlineKeyboard } {
-  return {
-    text: "📢 <b>BROADCAST PENGUMUMAN</b>\n━━━━━━━━━━━━━━━━\n\nKetik JUDUL pengumuman:",
-    kb: [[{ text: "❌ Batal", callback_data: "sig:cancel" }]],
-  };
+  return { text: "📢 <b>BROADCAST PENGUMUMAN</b>\n━━━━━━━━━━━━━━━━\n\nKetik JUDUL pengumuman:", kb: [[CANCEL_BTN]] };
 }
 
 function broadcastBodyPromptView(title: string): { text: string; kb: InlineKeyboard } {
   return {
     text: `📢 <b>BROADCAST PENGUMUMAN</b>\n━━━━━━━━━━━━━━━━\n\nJudul: <b>${title}</b>\n\nKetik ISI pengumuman:`,
-    kb: [[{ text: "❌ Batal", callback_data: "sig:cancel" }]],
+    kb: [[CANCEL_BTN]],
   };
 }
 
-// ---------- signal message formatting ----------
+// ---------- outbound signal message (NO "manual" wording — reads like a normal signal) ----------
 
 function fmtNum(n: number, decimals: number) {
   return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-function buildManualSignalMessage(
-  pairKey: string,
-  direction: string,
-  entry: number,
-  sl: number,
-  tps: number[]
-): string {
+function buildSignalMessage(pairKey: string, direction: string, entry: number, sl: number, tps: number[]): string {
   const cfg = SIGNAL_PAIRS.find((p) => p.key === pairKey);
   const decimals = cfg && cfg.pipUnit < 1 ? 2 : 0;
-  const suffix = cfg?.pipLabelSuffix || "";
   const tpLines = tps.map((tp, i) => `TP${i + 1} → ${fmtNum(tp, decimals)}`).join("\n");
   return (
-    `<b>LASTQUESTION.CO — SINYAL MANUAL</b>\n\n` +
-    `📊 PAIR   : ${pairKey}\n` +
-    `📈 SETUP  : ${direction}\n` +
-    `🎯 ENTRY  : ${fmtNum(entry, decimals)}\n\n` +
-    `🎯 TAKE PROFIT\n${tpLines}\n\n` +
-    `🔴 STOP LOSS : ${fmtNum(sl, decimals)}\n\n` +
-    `Sumber: Analisa Manual Tim LASTQUESTION.CO\n\n` +
-    `⚠️ Gunakan money management. Amankan profit bertahap.\n\n` +
-    `#SINYALMANUAL #${pairKey}\n\nlastquestion.store`
+    `<b>LASTQUESTION.CO — SIGNAL</b>\n\n` +
+    `📊 PAIR   : ${pairKey}\n📈 SETUP  : ${direction}\n🎯 ENTRY  : ${fmtNum(entry, decimals)}\n\n` +
+    `🎯 TAKE PROFIT\n${tpLines}\n\n🔴 STOP LOSS : ${fmtNum(sl, decimals)}\n\n` +
+    `⚠️ Gunakan money management. Amankan profit bertahap.\n\n#${pairKey}\n\nlastquestion.store`
   );
+}
+
+// ---------- Member VIP views ----------
+
+async function vipListView(admin: ReturnType<typeof getSupabaseAdmin>): Promise<{ text: string; kb: InlineKeyboard }> {
+  const { data } = await admin
+    .from("qco2_profiles")
+    .select("id, full_name, email, expired_at")
+    .eq("role", "vip_member")
+    .order("expired_at", { ascending: true })
+    .limit(5);
+
+  const rows: InlineKeyboard = [];
+  let text = "👥 <b>MEMBER VIP — EXPIRY TERDEKAT</b>\n━━━━━━━━━━━━━━━━\n\n";
+  if (!data || data.length === 0) {
+    text += "Tidak ada member VIP aktif.";
+  } else {
+    data.forEach((p, i) => {
+      const label = p.full_name || p.email;
+      text += `${i + 1}. <b>${label}</b>\n   Expired: ${fmtDate(p.expired_at)}\n\n`;
+      rows.push([{ text: `+30 hari → ${label}`.slice(0, 60), callback_data: `mem:extend:${p.id}` }]);
+    });
+  }
+  rows.push([{ text: "🔍 Cari Member Lain", callback_data: "mem:search" }]);
+  rows.push([BACK_BTN]);
+  return { text, kb: rows };
+}
+
+function memberSearchPromptView(): { text: string; kb: InlineKeyboard } {
+  return { text: "🔍 <b>CARI MEMBER</b>\n━━━━━━━━━━━━━━━━\n\nKetik email atau nama member:", kb: [[CANCEL_BTN]] };
+}
+
+// ---------- Invoice views ----------
+
+async function invoiceListView(admin: ReturnType<typeof getSupabaseAdmin>): Promise<{ text: string; kb: InlineKeyboard }> {
+  const { data } = await admin
+    .from("qco2_invoices")
+    .select("id, email, tier, amount, created_at")
+    .eq("status", "pending")
+    .order("created_at", { ascending: true })
+    .limit(5);
+
+  const rows: InlineKeyboard = [];
+  let text = "🧾 <b>INVOICE PENDING</b>\n━━━━━━━━━━━━━━━━\n\n";
+  if (!data || data.length === 0) {
+    text += "Tidak ada invoice pending.";
+  } else {
+    data.forEach((inv, i) => {
+      text += `${i + 1}. <b>${inv.email}</b>\n   ${inv.tier} — Rp${Number(inv.amount).toLocaleString("id-ID")}\n\n`;
+      rows.push([
+        { text: `✅ Confirm #${i + 1}`, callback_data: `inv:confirm:${inv.id}` },
+        { text: `❌ Reject #${i + 1}`, callback_data: `inv:reject:${inv.id}` },
+      ]);
+    });
+  }
+  rows.push([BACK_BTN]);
+  return { text, kb: rows };
+}
+
+// ---------- Global stats views ----------
+
+async function globalStatsView(admin: ReturnType<typeof getSupabaseAdmin>): Promise<{ text: string; kb: InlineKeyboard }> {
+  const { data } = await admin.from("global_statistics").select("*").eq("id", 1).maybeSingle();
+  const text =
+    `📈 <b>STATISTIK GLOBAL</b>\n━━━━━━━━━━━━━━━━\n\n` +
+    `🎯 Win Rate       : <b>${data?.win_rate ?? "-"}%</b>\n` +
+    `📊 Total Trade    : <b>${data?.total_trade ?? "-"}</b>\n` +
+    `💰 Profit Pips    : <b>${data?.profit_pips ?? "-"}</b>\n` +
+    `🎓 Kelas Selesai  : <b>${data?.kelas_completed ?? "-"}</b>\n\n` +
+    `Pilih yang mau diedit:`;
+  const kb: InlineKeyboard = [
+    [{ text: "✏️ Win Rate", callback_data: "gs:edit:win_rate" }],
+    [{ text: "✏️ Total Trade", callback_data: "gs:edit:total_trade" }],
+    [{ text: "✏️ Profit Pips", callback_data: "gs:edit:profit_pips" }],
+    [{ text: "✏️ Kelas Selesai", callback_data: "gs:edit:kelas_completed" }],
+    [BACK_BTN],
+  ];
+  return { text, kb };
+}
+
+const GS_LABELS: Record<string, string> = {
+  win_rate: "Win Rate (%)",
+  total_trade: "Total Trade",
+  profit_pips: "Profit Pips",
+  kelas_completed: "Kelas Selesai",
+};
+
+function gsEditPromptView(field: string): { text: string; kb: InlineKeyboard } {
+  return {
+    text: `📈 <b>EDIT STATISTIK GLOBAL</b>\n━━━━━━━━━━━━━━━━\n\nKetik nilai baru untuk <b>${GS_LABELS[field]}</b>:`,
+    kb: [[CANCEL_BTN]],
+  };
+}
+
+// ---------- Lot entry views ----------
+
+function lotSearchPromptView(): { text: string; kb: InlineKeyboard } {
+  return { text: "🏆 <b>TAMBAH LOT ENTRY</b>\n━━━━━━━━━━━━━━━━\n\nKetik email atau nama member:", kb: [[CANCEL_BTN]] };
+}
+
+function lotPairStepView(memberLabel: string): { text: string; kb: InlineKeyboard } {
+  return {
+    text: `🏆 <b>TAMBAH LOT ENTRY</b>\n━━━━━━━━━━━━━━━━\n\nMember: <b>${memberLabel}</b>\nPilih pair:`,
+    kb: [
+      [
+        { text: "XAUUSD", callback_data: "lot:pair:XAUUSD" },
+        { text: "BTCUSDT", callback_data: "lot:pair:BTCUSDT" },
+      ],
+      [CANCEL_BTN],
+    ],
+  };
+}
+
+function lotSizePromptView(header: string): { text: string; kb: InlineKeyboard } {
+  return { text: `🏆 <b>TAMBAH LOT ENTRY</b>\n━━━━━━━━━━━━━━━━\n\n${header}\n\nKetik jumlah LOT (0.01 - 1.00):`, kb: [[CANCEL_BTN]] };
+}
+
+function lotPricePromptView(header: string): { text: string; kb: InlineKeyboard } {
+  return { text: `🏆 <b>TAMBAH LOT ENTRY</b>\n━━━━━━━━━━━━━━━━\n\n${header}\n\nKetik HARGA saat entry:`, kb: [[CANCEL_BTN]] };
+}
+
+function lotConfirmView(d: Record<string, any>): { text: string; kb: InlineKeyboard } {
+  return {
+    text:
+      `🏆 <b>KONFIRMASI LOT ENTRY</b>\n━━━━━━━━━━━━━━━━\n\n` +
+      `Member : <b>${d.memberLabel}</b>\nPair   : <b>${d.pair}</b>\nLot    : <b>${d.lot}</b>\nHarga  : <b>${d.price}</b>\n\nSimpan sekarang?`,
+    kb: [
+      [{ text: "✅ SIMPAN", callback_data: "lot:confirm" }],
+      [CANCEL_BTN],
+    ],
+  };
 }
 
 // ---------- webhook handler ----------
@@ -186,7 +299,7 @@ export async function POST(req: NextRequest) {
 
   const admin = getSupabaseAdmin();
 
-  // ----- callback query (inline button press) -----
+  // ================= callback query (inline button press) =================
   if (update.callback_query) {
     const cq = update.callback_query;
     const fromId = cq.from?.id;
@@ -203,11 +316,12 @@ export async function POST(req: NextRequest) {
     const session = await getSession(admin, chatId);
     session.panel_message_id = messageId;
 
-    if (data === "menu:main") {
+    if (data === "menu:main" || data === "cancel") {
       session.state = "idle";
       session.data = {};
       const v = mainMenuView();
-      await editMessageText(chatId, messageId, v.text, v.kb);
+      const prefix = data === "cancel" ? "❌ Dibatalkan.\n\n" : "";
+      await editMessageText(chatId, messageId, prefix + v.text, v.kb);
     } else if (data === "menu:close") {
       await deleteMessage(chatId, messageId);
       session.state = "idle";
@@ -223,28 +337,114 @@ export async function POST(req: NextRequest) {
       session.data = {};
       const v = broadcastTitlePromptView();
       await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data === "menu:vip") {
+      session.state = "idle";
+      session.data = {};
+      const v = await vipListView(admin);
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data === "mem:search") {
+      session.state = "vip_search";
+      const v = memberSearchPromptView();
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data.startsWith("mem:extend:")) {
+      const id = data.split(":")[2];
+      const { data: prof } = await admin.from("qco2_profiles").select("expired_at").eq("id", id).maybeSingle();
+      const base = prof?.expired_at && new Date(prof.expired_at).getTime() > Date.now() ? new Date(prof.expired_at).getTime() : Date.now();
+      const newExpiry = new Date(base + 30 * 24 * 60 * 60 * 1000).toISOString();
+      await admin.from("qco2_profiles").update({ role: "vip_member", expired_at: newExpiry, updated_at: new Date().toISOString() }).eq("id", id);
+      const v = await vipListView(admin);
+      await editMessageText(chatId, messageId, `✅ Diperpanjang 30 hari.\n\n${v.text}`, v.kb);
+    } else if (data === "menu:invoice") {
+      session.state = "idle";
+      session.data = {};
+      const v = await invoiceListView(admin);
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data.startsWith("inv:confirm:") || data.startsWith("inv:reject:")) {
+      const id = data.split(":")[2];
+      const isConfirm = data.startsWith("inv:confirm:");
+      const status = isConfirm ? "confirmed" : "rejected";
+      const { data: invoice } = await admin
+        .from("qco2_invoices")
+        .update({ status, confirmed_at: isConfirm ? new Date().toISOString() : null })
+        .eq("id", id)
+        .select()
+        .single();
+
+      if (isConfirm && invoice) {
+        const expiredAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        const { data: existing } = await admin.from("qco2_profiles").select("id").eq("email", invoice.email).maybeSingle();
+        if (existing) {
+          await admin
+            .from("qco2_profiles")
+            .update({ role: "vip_member", tier: invoice.tier, expired_at: expiredAt, updated_at: new Date().toISOString() })
+            .eq("id", existing.id);
+        } else {
+          await admin.from("qco2_profiles").insert({ email: invoice.email, role: "vip_member", tier: invoice.tier, expired_at: expiredAt });
+        }
+      }
+      const v = await invoiceListView(admin);
+      const prefix = isConfirm ? "✅ Invoice dikonfirmasi, member jadi VIP 30 hari.\n\n" : "❌ Invoice ditolak.\n\n";
+      await editMessageText(chatId, messageId, prefix + v.text, v.kb);
+    } else if (data === "menu:globalstats") {
+      session.state = "idle";
+      session.data = {};
+      const v = await globalStatsView(admin);
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data.startsWith("gs:edit:")) {
+      const field = data.split(":")[2];
+      session.state = "gs_awaiting_value";
+      session.data = { field };
+      const v = gsEditPromptView(field);
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data === "menu:lot") {
+      session.state = "lot_search";
+      session.data = {};
+      const v = lotSearchPromptView();
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data.startsWith("lot:pick:")) {
+      const id = data.split(":")[2];
+      const { data: prof } = await admin.from("qco2_profiles").select("id, full_name, email").eq("id", id).maybeSingle();
+      if (!prof) {
+        await editMessageText(chatId, messageId, "❌ Member tidak ditemukan.", [[BACK_BTN]]);
+      } else {
+        session.state = "lot_pair";
+        session.data = { profile_id: prof.id, memberLabel: prof.full_name || prof.email };
+        const v = lotPairStepView(session.data.memberLabel);
+        await editMessageText(chatId, messageId, v.text, v.kb);
+      }
+    } else if (data.startsWith("lot:pair:")) {
+      const pair = data.split(":")[2];
+      session.data = { ...session.data, pair };
+      session.state = "lot_size_input";
+      const v = lotSizePromptView(`Member: <b>${session.data.memberLabel}</b> | Pair: <b>${pair}</b>`);
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data === "lot:confirm") {
+      const d = session.data;
+      const { data: profile } = await admin.from("qco2_profiles").select("id, total_lot").eq("id", d.profile_id).maybeSingle();
+      if (!profile) {
+        await editMessageText(chatId, messageId, "❌ Member tidak ditemukan.", [[BACK_BTN]]);
+      } else {
+        const direction = Math.random() < 0.5 ? "BUY" : "SELL";
+        await admin.from("qco2_lot_entries").insert({ profile_id: d.profile_id, pair: d.pair, lot_size: d.lot, price: d.price, is_auto: false, direction });
+        const nextLot = Math.round((Number(profile.total_lot ?? 0) + d.lot) * 100) / 100;
+        await admin.from("qco2_profiles").update({ total_lot: nextLot, updated_at: new Date().toISOString() }).eq("id", d.profile_id);
+        await editMessageText(chatId, messageId, `✅ Lot entry tersimpan!\n\nTotal lot member sekarang: <b>${nextLot}</b>`, [[BACK_BTN]]);
+      }
+      session.state = "idle";
+      session.data = {};
     } else if (data === "menu:stats") {
-      const { count: activeCount } = await admin
-        .from("qco2_signals")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "active");
+      const { count: activeCount } = await admin.from("qco2_signals").select("*", { count: "exact", head: true }).eq("status", "active");
       const todayStart = new Date();
       todayStart.setUTCHours(0, 0, 0, 0);
-      const { data: closedToday } = await admin
-        .from("qco2_signals")
-        .select("status")
-        .gte("closed_at", todayStart.toISOString());
+      const { data: closedToday } = await admin.from("qco2_signals").select("status").gte("closed_at", todayStart.toISOString());
       const tpCount = (closedToday || []).filter((r: any) => r.status === "tp_hit").length;
       const slCount = (closedToday || []).filter((r: any) => r.status === "sl_hit").length;
       const total = tpCount + slCount;
       const winRate = total > 0 ? Math.round((tpCount / total) * 100) : 0;
       const text =
-        `📈 <b>STATISTIK CEPAT</b>\n━━━━━━━━━━━━━━━━\n\n` +
-        `🟢 Sinyal Aktif   : <b>${activeCount ?? 0}</b>\n` +
-        `✅ TP Hari Ini    : <b>${tpCount}</b>\n` +
-        `🔴 SL Hari Ini    : <b>${slCount}</b>\n` +
-        `🎯 Win Rate Hari Ini : <b>${winRate}%</b>`;
-      await editMessageText(chatId, messageId, text, [[{ text: "🔙 Menu Utama", callback_data: "menu:main" }]]);
+        `📈 <b>STATISTIK CEPAT</b>\n━━━━━━━━━━━━━━━━\n\n🟢 Sinyal Aktif   : <b>${activeCount ?? 0}</b>\n` +
+        `✅ TP Hari Ini    : <b>${tpCount}</b>\n🔴 SL Hari Ini    : <b>${slCount}</b>\n🎯 Win Rate Hari Ini : <b>${winRate}%</b>`;
+      await editMessageText(chatId, messageId, text, [[BACK_BTN]]);
     } else if (data.startsWith("sig:pair:")) {
       const pair = data.split(":")[2];
       session.state = "signal_direction";
@@ -302,36 +502,22 @@ export async function POST(req: NextRequest) {
 
       const { error } = await admin.from("qco2_signals").insert(insertPayload);
       if (error) {
-        await editMessageText(chatId, messageId, `❌ Gagal simpan sinyal: ${error.message}`, [
-          [{ text: "🔙 Menu Utama", callback_data: "menu:main" }],
-        ]);
+        await editMessageText(chatId, messageId, `❌ Gagal simpan sinyal: ${error.message}`, [[BACK_BTN]]);
       } else {
-        const msg = buildManualSignalMessage(d.pair, d.direction, d.entry, d.sl, tps);
+        const msg = buildSignalMessage(d.pair, d.direction, d.entry, d.sl, tps);
         await sendToChannel(vipChannelId(), msg);
-        if (d.audience === "public") {
-          await sendToChannel(publicChannelId(), msg);
-        }
-        await editMessageText(
-          chatId,
-          messageId,
-          `✅ <b>Sinyal berhasil dikirim!</b>\n\nSudah tayang di web dan channel Telegram.`,
-          [[{ text: "🔙 Menu Utama", callback_data: "menu:main" }]]
-        );
+        if (d.audience === "public") await sendToChannel(publicChannelId(), msg);
+        await editMessageText(chatId, messageId, `✅ <b>Sinyal berhasil dikirim!</b>\n\nSudah tayang di web dan channel Telegram.`, [[BACK_BTN]]);
       }
       session.state = "idle";
       session.data = {};
-    } else if (data === "sig:cancel") {
-      session.state = "idle";
-      session.data = {};
-      const v = mainMenuView();
-      await editMessageText(chatId, messageId, `❌ Dibatalkan.\n\n${v.text}`, v.kb);
     }
 
     await saveSession(admin, session);
     return NextResponse.json({ ok: true });
   }
 
-  // ----- plain message -----
+  // ================= plain message =================
   if (update.message) {
     const msg = update.message;
     const fromId = msg.from?.id;
@@ -339,10 +525,7 @@ export async function POST(req: NextRequest) {
     const messageId = msg.message_id;
     const text: string = (msg.text || "").trim();
 
-    if (msg.chat?.type !== "private") {
-      // Ignore group/channel posts entirely — this bot's admin panel is DM-only.
-      return NextResponse.json({ ok: true });
-    }
+    if (msg.chat?.type !== "private") return NextResponse.json({ ok: true });
 
     if (fromId !== TELEGRAM_ADMIN_ID) {
       await sendMessage(chatId, "Bot ini khusus admin LASTQUESTION.CO.");
@@ -351,9 +534,7 @@ export async function POST(req: NextRequest) {
 
     if (text === "/start" || text === "/admin") {
       const session = await getSession(admin, chatId);
-      if (session.panel_message_id) {
-        await deleteMessage(chatId, session.panel_message_id).catch(() => {});
-      }
+      if (session.panel_message_id) await deleteMessage(chatId, session.panel_message_id).catch(() => {});
       const v = mainMenuView();
       const sent = await sendMessage(chatId, v.text, v.kb);
       session.panel_message_id = sent?.result?.message_id ?? null;
@@ -363,15 +544,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    // Text reply for an active wizard step — process then delete the admin's message to keep chat clean.
     const session = await getSession(admin, chatId);
     const panelId = session.panel_message_id;
 
-    const isNumericStep = ["signal_entry", "signal_sl", "signal_tp_input"].includes(session.state);
-    const isTextStep = ["broadcast_title", "broadcast_body"].includes(session.state);
+    const numericSteps = ["signal_entry", "signal_sl", "signal_tp_input", "gs_awaiting_value", "lot_size_input", "lot_price_input"];
+    const textSteps = ["broadcast_title", "broadcast_body", "vip_search", "lot_search"];
 
-    if (!isNumericStep && !isTextStep) {
-      // No active step expecting text — just clean up stray messages.
+    if (!numericSteps.includes(session.state) && !textSteps.includes(session.state)) {
       await deleteMessage(chatId, messageId).catch(() => {});
       return NextResponse.json({ ok: true });
     }
@@ -379,27 +558,22 @@ export async function POST(req: NextRequest) {
     await deleteMessage(chatId, messageId).catch(() => {});
     if (!panelId) return NextResponse.json({ ok: true });
 
-    if (isNumericStep) {
+    if (numericSteps.includes(session.state)) {
       const num = Number(text.replace(",", "."));
       if (Number.isNaN(num)) {
         await sendMessage(chatId, "⚠️ Harus angka. Coba lagi.");
         return NextResponse.json({ ok: true });
       }
+
       if (session.state === "signal_entry") {
         session.data = { ...session.data, entry: num };
         session.state = "signal_sl";
-        const v = textPromptView(
-          `Pair: <b>${session.data.pair}</b> | Arah: <b>${session.data.direction}</b> | Entry: <b>${num}</b>`,
-          "Step 4/6 — Ketik harga STOP LOSS:"
-        );
+        const v = textPromptView(`Pair: <b>${session.data.pair}</b> | Arah: <b>${session.data.direction}</b> | Entry: <b>${num}</b>`, "Step 4/6 — Ketik harga STOP LOSS:");
         await editMessageText(chatId, panelId, v.text, v.kb);
       } else if (session.state === "signal_sl") {
         session.data = { ...session.data, sl: num };
         session.state = "signal_tp_input";
-        const v = textPromptView(
-          `Pair: <b>${session.data.pair}</b> | Entry: <b>${session.data.entry}</b> | SL: <b>${num}</b>`,
-          "Step 5/6 — Ketik harga TP1:"
-        );
+        const v = textPromptView(`Pair: <b>${session.data.pair}</b> | Entry: <b>${session.data.entry}</b> | SL: <b>${num}</b>`, "Step 5/6 — Ketik harga TP1:");
         await editMessageText(chatId, panelId, v.text, v.kb);
       } else if (session.state === "signal_tp_input") {
         const tps = [...(session.data.tps || []), num];
@@ -408,8 +582,29 @@ export async function POST(req: NextRequest) {
         const header = `Pair: <b>${session.data.pair}</b> | Entry: <b>${session.data.entry}</b> | SL: <b>${session.data.sl}</b>\nTP: ${tps.join(", ")}`;
         const v = tpMenuView(header, tps.length);
         await editMessageText(chatId, panelId, v.text, v.kb);
+      } else if (session.state === "gs_awaiting_value") {
+        const field = session.data.field as string;
+        await admin.from("global_statistics").update({ [field]: num, updated_at: new Date().toISOString() }).eq("id", 1);
+        const v = await globalStatsView(admin);
+        await editMessageText(chatId, panelId, `✅ ${GS_LABELS[field]} diupdate ke ${num}.\n\n${v.text}`, v.kb);
+        session.state = "idle";
+        session.data = {};
+      } else if (session.state === "lot_size_input") {
+        if (num < 0.01 || num > 1) {
+          await sendMessage(chatId, "⚠️ Lot harus antara 0.01 - 1.00.");
+          return NextResponse.json({ ok: true });
+        }
+        session.data = { ...session.data, lot: num };
+        session.state = "lot_price_input";
+        const v = lotPricePromptView(`Member: <b>${session.data.memberLabel}</b> | Pair: <b>${session.data.pair}</b> | Lot: <b>${num}</b>`);
+        await editMessageText(chatId, panelId, v.text, v.kb);
+      } else if (session.state === "lot_price_input") {
+        session.data = { ...session.data, price: num };
+        session.state = "lot_confirm";
+        const v = lotConfirmView(session.data);
+        await editMessageText(chatId, panelId, v.text, v.kb);
       }
-    } else if (isTextStep) {
+    } else if (textSteps.includes(session.state)) {
       if (session.state === "broadcast_title") {
         session.data = { title: text };
         session.state = "broadcast_body";
@@ -419,19 +614,56 @@ export async function POST(req: NextRequest) {
         const title = session.data.title || "Pengumuman";
         const { error } = await admin.from("qco2_announcements").insert({ title, body: text, pinned: false });
         if (error) {
-          await editMessageText(chatId, panelId, `❌ Gagal simpan pengumuman: ${error.message}`, [
-            [{ text: "🔙 Menu Utama", callback_data: "menu:main" }],
-          ]);
+          await editMessageText(chatId, panelId, `❌ Gagal simpan pengumuman: ${error.message}`, [[BACK_BTN]]);
         } else {
           const broadcastMsg = `📢 <b>PENGUMUMAN</b>\n━━━━━━━━━━━━━━━━\n\n<b>${title}</b>\n\n${text}\n\nlastquestion.store`;
           await sendToChannel(vipChannelId(), broadcastMsg);
           await sendToChannel(publicChannelId(), broadcastMsg);
-          await editMessageText(chatId, panelId, `✅ <b>Pengumuman terkirim!</b>\n\nTayang di web dan kedua channel Telegram.`, [
-            [{ text: "🔙 Menu Utama", callback_data: "menu:main" }],
-          ]);
+          await editMessageText(chatId, panelId, `✅ <b>Pengumuman terkirim!</b>\n\nTayang di web dan kedua channel Telegram.`, [[BACK_BTN]]);
         }
         session.state = "idle";
         session.data = {};
+      } else if (session.state === "vip_search") {
+        const { data: matches } = await admin
+          .from("qco2_profiles")
+          .select("id, full_name, email, expired_at")
+          .or(`email.ilike.%${text}%,full_name.ilike.%${text}%`)
+          .limit(5);
+        const rows: InlineKeyboard = [];
+        let out = `🔍 <b>HASIL PENCARIAN</b>\n━━━━━━━━━━━━━━━━\n\n`;
+        if (!matches || matches.length === 0) {
+          out += "Tidak ditemukan.";
+        } else {
+          matches.forEach((p: any, i: number) => {
+            const label = p.full_name || p.email;
+            out += `${i + 1}. <b>${label}</b> — Exp: ${fmtDate(p.expired_at)}\n`;
+            rows.push([{ text: `+30 hari → ${label}`.slice(0, 60), callback_data: `mem:extend:${p.id}` }]);
+          });
+        }
+        rows.push([BACK_BTN]);
+        await editMessageText(chatId, panelId, out, rows);
+        session.state = "idle";
+        session.data = {};
+      } else if (session.state === "lot_search") {
+        const { data: matches } = await admin
+          .from("qco2_profiles")
+          .select("id, full_name, email")
+          .or(`email.ilike.%${text}%,full_name.ilike.%${text}%`)
+          .limit(5);
+        const rows: InlineKeyboard = [];
+        let out = `🏆 <b>PILIH MEMBER</b>\n━━━━━━━━━━━━━━━━\n\n`;
+        if (!matches || matches.length === 0) {
+          out += "Tidak ditemukan.";
+        } else {
+          matches.forEach((p: any) => {
+            const label = p.full_name || p.email;
+            rows.push([{ text: label.slice(0, 60), callback_data: `lot:pick:${p.id}` }]);
+          });
+        }
+        rows.push([CANCEL_BTN]);
+        await editMessageText(chatId, panelId, out, rows);
+        // stay in a neutral state until they pick a button
+        session.state = "idle";
       }
     }
 
