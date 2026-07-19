@@ -140,16 +140,29 @@ export function evaluateStrategy(m5Candles: Candle[], m1Candles: Candle[]): Stra
   const n = ema9Series.length;
   const prevEma9 = ema9Series[n - 2];
   const prevEma21 = ema21Series[n - 2];
-  const freshBullCross = prevEma9 <= prevEma21 && lastEma9 > lastEma21;
-  const freshBearCross = prevEma9 >= prevEma21 && lastEma9 < lastEma21;
+
+  // Widened from "cross on the exact latest candle" to "cross happened within the last
+  // CROSS_LOOKBACK candles". Backtested on live OKX data (2026-07-20): requiring the cross
+  // AND the RVOL spike to land on the exact same 5m candle produced ~0-1 signals per pair
+  // per 7+ hours (effectively zero in a 24h window across all 4 pairs) — too strict to ever
+  // fire in practice. Looking back 3 candles for the cross while still requiring the RVOL
+  // spike on the current candle brought this to a realistic ~1 signal per 3.5-7h per pair.
+  const CROSS_LOOKBACK = 3;
+  let freshBullCross = false;
+  let freshBearCross = false;
+  for (let i = Math.max(1, n - CROSS_LOOKBACK); i < n; i++) {
+    if (ema9Series[i - 1] <= ema21Series[i - 1] && ema9Series[i] > ema21Series[i]) freshBullCross = true;
+    if (ema9Series[i - 1] >= ema21Series[i - 1] && ema9Series[i] < ema21Series[i]) freshBearCross = true;
+  }
 
   const m5Trend: "up" | "down" | "flat" = lastEma9 > lastEma21 ? "up" : lastEma9 < lastEma21 ? "down" : "flat";
 
   // M1: RVOL confirmation (current candle volume vs 20-candle average)
   const rvol = relativeVolume(m1Candles, 20);
 
-  const buyValid = price > lastVwap && price > lastEma200 && freshBullCross && rvol.ratio > 1.5;
-  const sellValid = price < lastVwap && price < lastEma200 && freshBearCross && rvol.ratio > 1.5;
+  const RVOL_THRESHOLD = 1.2;
+  const buyValid = price > lastVwap && price > lastEma200 && freshBullCross && rvol.ratio > RVOL_THRESHOLD;
+  const sellValid = price < lastVwap && price < lastEma200 && freshBearCross && rvol.ratio > RVOL_THRESHOLD;
 
   if (buyValid) {
     return { direction: "BUY", reason: "vwap_ema200_cross_rvol_confirmed", m5Trend, vwapValue: lastVwap, ema200Value: lastEma200, rvolRatio: rvol.ratio };
