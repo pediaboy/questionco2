@@ -3,11 +3,15 @@
 // closely tracks LBMA spot gold with good liquidity) as a real-time data proxy for
 // direction/momentum, but price levels (entry/TP/SL) are anchored to the site's own
 // live XAUUSD ticker price so displayed numbers match what members see elsewhere.
+// BTC/ETH/SOL use their OKX USDT pair directly (both signal + price anchor).
 //
 // Risk model (fixed, no ATR): SL is always 50 pips from entry. TP1/TP2/TP3 sit at
 // 50/100/200 pips — RR 1:1, 1:2, 1:4. `pipUnit` is the price value of ONE pip for
 // that instrument (e.g. 0.1 for XAUUSD), so the same 50/100/200 pip counts scale
 // correctly across very different instruments via `pipsToPrice(pips, pipUnit)`.
+// pipUnit values are calibrated so the resulting 50-pip SL sits at roughly 3-3.5x
+// each instrument's average 5-minute price range (checked live against OKX data on
+// 2026-07-19) — tight enough to matter, wide enough to survive normal noise.
 export interface PairConfig {
   key: string;
   label: string;
@@ -36,7 +40,27 @@ export const SIGNAL_PAIRS: PairConfig[] = [
     key: "BTCUSDT",
     label: "BTCUSDT",
     dataInstId: "BTC-USDT",
-    pipUnit: 4, // 1 "pip" = $4 move — keeps the same 50/100/200 pip counts, scaled to BTC's volatility
+    pipUnit: 4, // 1 "pip" = $4 move -> 50-pip SL = $200 (~0.31% of ~$64.5k)
+    tpPips: [50, 100, 200],
+    slPips: 50,
+    pipLabelSuffix: "USD",
+    skipWeekends: false,
+  },
+  {
+    key: "ETHUSDT",
+    label: "ETHUSDT",
+    dataInstId: "ETH-USDT",
+    pipUnit: 0.2, // 1 "pip" = $0.20 move -> 50-pip SL = $10 (~0.53% of ~$1.87k)
+    tpPips: [50, 100, 200],
+    slPips: 50,
+    pipLabelSuffix: "USD",
+    skipWeekends: false,
+  },
+  {
+    key: "SOLUSDT",
+    label: "SOLUSDT",
+    dataInstId: "SOL-USDT",
+    pipUnit: 0.008, // 1 "pip" = $0.008 move -> 50-pip SL = $0.40 (~0.53% of ~$76)
     tpPips: [50, 100, 200],
     slPips: 50,
     pipLabelSuffix: "USD",
