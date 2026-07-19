@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono, Rajdhani } from "next/font/google";
 import "./globals.css";
 
@@ -13,6 +13,15 @@ const display = Rajdhani({
   subsets: ["latin"],
   weight: ["500", "600", "700"],
 });
+
+// Locks pinch-zoom / double-tap-zoom across every page (mobile HUD feel,
+// prevents accidental zoom breaking the fixed-header/bottom-nav layout).
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+};
 
 export const metadata: Metadata = {
   title: "LASTQUESTION.CO — Master The Market",

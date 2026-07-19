@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { UserRound } from "lucide-react";
+import { UserRound, MoreVertical } from "lucide-react";
 import Link from "next/link";
 import DashboardHamburgerOverlay from "./DashboardHamburgerOverlay";
+import AllFeaturesSheet from "./AllFeaturesSheet";
 import HudClock from "./HudClock";
 
 function SignalHamburger() {
@@ -18,11 +19,12 @@ function SignalHamburger() {
 
 export default function MemberHeader() {
   const [open, setOpen] = useState(false);
+  const [featuresOpen, setFeaturesOpen] = useState(false);
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50">
       <header className="flex items-center justify-between px-5 py-3 bg-black/55 backdrop-blur-xl border-b border-dashed border-cyan-400/25 max-w-md mx-auto">
-        <button onClick={() => setOpen(true)} aria-label="Menu" className="p-2 -m-2">
+        <button onClick={() => setOpen(true)} aria-label="Menu Akun" className="p-2 -m-2">
           <SignalHamburger />
         </button>
 
@@ -33,13 +35,27 @@ export default function MemberHeader() {
           <HudClock />
         </div>
 
-        <Link href="/dashboard/profil" className="relative p-2 -m-2 block">
-          <UserRound size={22} strokeWidth={1.5} className="text-white/70" />
-          <span className="absolute bottom-1 right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 border border-black shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-        </Link>
+        <div className="flex items-center gap-1">
+          {/* Consolidated dashboard-only features menu (mirrors bottom-nav "Fitur",
+              scoped strictly to /dashboard/* pages -- never mixed with public
+              marketing nav from HamburgerOverlay). */}
+          <button
+            onClick={() => setFeaturesOpen(true)}
+            aria-label="Semua Fitur"
+            className="p-2 -m-2 text-white/70 hover:text-cyan-300 transition-colors"
+          >
+            <MoreVertical size={20} strokeWidth={1.5} />
+          </button>
+
+          <Link href="/dashboard/profil" className="relative p-2 -m-2 block">
+            <UserRound size={22} strokeWidth={1.5} className="text-white/70" />
+            <span className="absolute bottom-1 right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 border border-black shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+          </Link>
+        </div>
       </header>
 
       <DashboardHamburgerOverlay open={open} onClose={() => setOpen(false)} />
+      <AllFeaturesSheet open={featuresOpen} onClose={() => setFeaturesOpen(false)} />
     </div>
   );
 }
