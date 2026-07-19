@@ -11,6 +11,7 @@ import {
   Calculator,
   Trophy,
   Megaphone,
+  Award,
 } from "lucide-react";
 
 // Icon mapping based on keys returned by the API
@@ -23,6 +24,7 @@ const ICONS: Record<string, React.ComponentType<{ className?: string; size?: num
   Calculator,
   Trophy,
   Megaphone,
+  Award,
 };
 
 interface QuickMenuItem {
