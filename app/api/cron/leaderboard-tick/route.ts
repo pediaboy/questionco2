@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { xau, btc } = await getLivePrices();
-  const newLotEntries: { profile_id: string; pair: string; lot_size: number; price: number; is_auto: boolean }[] = [];
+  const newLotEntries: { profile_id: string; pair: string; lot_size: number; price: number; is_auto: boolean; direction: string }[] = [];
 
   const updates = entries.map(async (e) => {
     // 0-2 realistic trade entries per tick, per profile — not everyone moves every tick.
@@ -79,8 +79,9 @@ export async function POST(req: NextRequest) {
       const pair = Math.random() < 0.5 ? "XAUUSD" : "BTCUSDT";
       const lot = round2(randomBetween(0.01, 1));
       const price = pair === "XAUUSD" ? xau : btc;
+      const direction = Math.random() < 0.5 ? "BUY" : "SELL";
       lotDelta += lot;
-      newLotEntries.push({ profile_id: e.id, pair, lot_size: lot, price, is_auto: true });
+      newLotEntries.push({ profile_id: e.id, pair, lot_size: lot, price, is_auto: true, direction });
     }
 
     const nextLot = round2(Number(e.total_lot ?? 0) + lotDelta);

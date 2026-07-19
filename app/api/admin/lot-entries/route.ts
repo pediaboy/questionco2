@@ -62,9 +62,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Member tidak ditemukan." }, { status: 404 });
     }
 
+    const direction = Math.random() < 0.5 ? "BUY" : "SELL";
     const { data: entry, error: insErr } = await admin
       .from("qco2_lot_entries")
-      .insert({ profile_id, pair, lot_size, price, is_auto: false })
+      .insert({ profile_id, pair, lot_size, price, is_auto: false, direction })
       .select()
       .single();
 

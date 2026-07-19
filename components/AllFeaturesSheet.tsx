@@ -18,6 +18,7 @@ import {
   Lock,
   Gem,
   Award,
+  Activity,
 } from "lucide-react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import VipUpgradeModal from "./VipUpgradeModal";
@@ -57,7 +58,8 @@ const CATEGORIES: { title: string; items: FeatureItem[] }[] = [
     title: "CUAN",
     items: [
       { label: "Leaderboard", href: "/dashboard/leaderboard", icon: Trophy },
-      { label: "Papan Peringkat", href: "/papan-peringkat", icon: Award },
+      { label: "Papan Peringkat", href: "/dashboard/papan-peringkat", icon: Award },
+      { label: "Open Posisi", href: "/dashboard/entry", icon: Activity },
       { label: "Kontes Lot", href: "/dashboard/kontes", icon: Gem },
       { label: "Pengumuman", href: "/dashboard/pengumuman", icon: Bell },
       { label: "Upgrade VIP", href: "/dashboard/upgrade", icon: Wallet },
