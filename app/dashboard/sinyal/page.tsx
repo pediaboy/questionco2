@@ -113,6 +113,11 @@ export default function SinyalPage() {
                             <Zap size={9} /> AUTO
                           </span>
                         )}
+                        {sig.source === "auto" && typeof sig.confidence === "number" && (
+                          <span className="flex items-center gap-1 text-[9px] font-bold font-mono px-1.5 py-0.5 border text-cyan-300 border-cyan-400/40 bg-cyan-400/10">
+                            {sig.confidence}% CONF
+                          </span>
+                        )}
                         {sig.audience === "public" && (
                           <span className="text-[9px] font-bold font-mono px-1.5 py-0.5 border text-cyan-400 border-cyan-500/40 bg-cyan-500/10">
                             PUBLIC

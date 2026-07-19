@@ -17,6 +17,8 @@ export interface SignalItem {
   audience?: string;
   status: string;
   created_at: string;
+  confidence?: number | null;
+  strategy_mode?: string | null;
 }
 
 const fetcher = async (url: string): Promise<SignalItem[]> => {
