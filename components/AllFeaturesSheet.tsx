@@ -19,6 +19,7 @@ import {
   Gem,
   Award,
   Activity,
+  PieChart,
 } from "lucide-react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import VipUpgradeModal from "./VipUpgradeModal";
@@ -44,6 +45,7 @@ const CATEGORIES: { title: string; items: FeatureItem[] }[] = [
     items: [
       { label: "Sesi Trading", href: "/dashboard/sesi", icon: Globe2 },
       { label: "Kalender", href: "/dashboard/kalender", icon: BookOpen },
+      { label: "ETF", href: "/dashboard/etf", icon: PieChart },
     ],
   },
   {
