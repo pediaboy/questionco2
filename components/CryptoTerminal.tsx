@@ -2,18 +2,25 @@
 
 /**
  * LASTQUESTION :: Live Market Terminal & Whale Flow
- * Premium Cyberpunk HUD :: Real-time Binance WebSocket streams (no dummy data)
+ * Premium Cyberpunk HUD :: Real-time WebSocket streams (no dummy data)
  *
- * Streams used:
- *  - wss://data-stream.binance.vision/stream?streams=...   (spot ticker prices)
- *  - wss://fstream.binance.com/ws  ->  !forceOrder@arr      (liquidations)
- *                                  ->  btcusdt@aggTrade      (whale trades)
+ * Data sources (both public, no API key required):
+ *  - wss://data-stream.binance.vision/stream?streams=...   (spot ticker prices + aggTrade whale detection)
+ *  - wss://ws.okx.com:8443/ws/v5/public  -> "liquidation-orders" channel (SWAP liquidations)
  *
- * NOTE: these are connected DIRECTLY from the user's browser (client-side),
- * not proxied through our own server -- Binance blocks cloud/datacenter IPs
- * (confirmed 451 "restricted location" from our Vercel/sandbox region), but
- * a visitor's own residential connection is a different network path and can
- * usually reach these public market-data endpoints fine.
+ * NOTE: everything here connects DIRECTLY from the user's browser (client-side),
+ * not proxied through our own server. Binance SPOT market data works fine from
+ * both server and client. Binance FUTURES (fstream.binance.com) was tested and
+ * is silently blocked/restricted from our infra (connects + acks a subscribe,
+ * but never delivers actual trade/liquidation data) -- likely the same kind of
+ * regional restriction Binance applies more strictly to derivatives products.
+ * So liquidations are sourced from OKX's public liquidation-orders feed instead
+ * (same reliable provider already used elsewhere on this site), while whale
+ * trades are detected from Binance's public SPOT aggTrade stream.
+ *
+ * XAU is not a real Binance pair -- PAXGUSDT (PAX Gold, a tokenized gold asset)
+ * is used as a live price proxy, same approach as the XAUT proxy used by the
+ * auto-signal engine elsewhere in this project.
  */
 
 import type React from "react"
@@ -52,13 +59,23 @@ interface LogEntry {
 /*  CONSTANTS                                                                 */
 /* -------------------------------------------------------------------------- */
 
-const WHALE_THRESHOLD_USD = 100_000
+const WHALE_THRESHOLD_USD = 50_000
 const MAX_LOGS = 30
 
-const TRACKED: { symbol: string; label: string }[] = [
-  { symbol: "BTCUSDT", label: "BTC" },
-  { symbol: "ETHUSDT", label: "ETH" },
-  { symbol: "SOLUSDT", label: "SOL" },
+// XAU first (per site convention: gold leads the ticker bar), then majors, then popular alts.
+// symbol = Binance spot pair used for the live price feed. base = short coin code used to
+// match against OKX's instFamily (e.g. "BTC-USDT") for the liquidation feed.
+const TRACKED: { symbol: string; label: string; base: string }[] = [
+  { symbol: "PAXGUSDT", label: "XAU", base: "PAXG" }, // gold proxy, no OKX perp match -> no liquidation feed for XAU
+  { symbol: "BTCUSDT", label: "BTC", base: "BTC" },
+  { symbol: "ETHUSDT", label: "ETH", base: "ETH" },
+  { symbol: "SOLUSDT", label: "SOL", base: "SOL" },
+  { symbol: "BNBUSDT", label: "BNB", base: "BNB" },
+  { symbol: "XRPUSDT", label: "XRP", base: "XRP" },
+  { symbol: "DOGEUSDT", label: "DOGE", base: "DOGE" },
+  { symbol: "ADAUSDT", label: "ADA", base: "ADA" },
+  { symbol: "AVAXUSDT", label: "AVAX", base: "AVAX" },
+  { symbol: "LINKUSDT", label: "LINK", base: "LINK" },
 ]
 
 const COLOR = {
@@ -89,14 +106,16 @@ function nowTime() {
 }
 
 function priceDecimals(symbol: string) {
-  return symbol.startsWith("BTC") || symbol.startsWith("ETH") ? 2 : 3
+  if (symbol.startsWith("XRP") || symbol.startsWith("ADA")) return 4
+  if (symbol.startsWith("DOGE")) return 5
+  return 2
 }
 
 /* -------------------------------------------------------------------------- */
 /*  RECONNECTING WEBSOCKET HOOK                                               */
 /* -------------------------------------------------------------------------- */
 
-function useBinanceSocket(
+function useReconnectingSocket(
   url: string,
   onMessage: (data: unknown) => void,
   opts?: { subscribe?: Record<string, unknown> },
@@ -245,14 +264,16 @@ function TickerCell({ t }: { t: TickerState }) {
 
   return (
     <div
-      className="relative flex min-w-[190px] flex-1 items-center gap-3 border-r px-4 py-3 transition-colors duration-150"
+      className="relative flex min-w-[150px] flex-1 items-center gap-3 border-r px-3 py-3 transition-colors duration-150"
       style={{ borderColor: COLOR.iron, backgroundColor: flashBg }}
     >
       <div className="flex flex-col">
         <span className="text-[10px] font-semibold tracking-[0.25em]" style={{ color: COLOR.cyan }}>
           {t.label}
         </span>
-        <span className="text-[9px] tracking-widest text-slate-500">USDT</span>
+        <span className="text-[9px] tracking-widest text-slate-500">
+          {t.symbol === "PAXGUSDT" ? "GOLD PROXY" : "USDT"}
+        </span>
       </div>
 
       <div className="flex flex-col">
@@ -385,107 +406,145 @@ export default function CryptoTerminal() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const newestIdRef = useRef<string | null>(null)
 
-  /* ---- Ticker stream (spot) ----
-     Targeted combined stream for just the tracked symbols. This avoids the
-     multi-megabyte !ticker@arr firehose that gets throttled/closed. */
-  const handleTicker = useCallback((msg: unknown) => {
-    // Combined stream frames arrive as { stream, data }; raw frames as the object itself.
-    const m = msg as Record<string, unknown>
-    const items: Array<Record<string, string>> = Array.isArray(msg)
-      ? (msg as Array<Record<string, string>>)
-      : m && m.data
-        ? [m.data as Record<string, string>]
-        : m && m.s
-          ? [m as unknown as Record<string, string>]
-          : []
-    if (items.length === 0) return
-
-    const wanted = new Set(TRACKED.map((t) => t.symbol))
-    setTickers((prev) => {
-      let changed = false
-      const next = { ...prev }
-      for (const item of items) {
-        const sym = item.s
-        if (!wanted.has(sym)) continue
-        const price = Number.parseFloat(item.c)
-        const changePct = Number.parseFloat(item.P)
-        const old = prev[sym]
-        if (!old) continue
-        const direction: Direction = price > old.price ? "up" : price < old.price ? "down" : "flat"
-        next[sym] = { ...old, prevPrice: old.price, price, changePct, direction }
-        changed = true
-      }
-      return changed ? next : prev
-    })
+  // Map of "BTC-USDT-SWAP" -> ctVal (contract face value in base coin units),
+  // fetched once from OKX's public instruments endpoint so liquidation USD
+  // values can be computed correctly (contract sizing differs per instrument).
+  const ctValMapRef = useRef<Record<string, number>>({})
+  useEffect(() => {
+    let cancelled = false
+    fetch("https://www.okx.com/api/v5/public/instruments?instType=SWAP")
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled || !Array.isArray(json?.data)) return
+        const map: Record<string, number> = {}
+        for (const inst of json.data) {
+          if (inst.instId && inst.ctVal) map[inst.instId] = Number.parseFloat(inst.ctVal)
+        }
+        ctValMapRef.current = map
+      })
+      .catch(() => {
+        /* non-fatal: liquidation USD values just won't compute until this loads */
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
-  const spotStreamUrl = useMemo(() => {
-    // Binance's official public market-data endpoint (not geo-restricted like
-    // stream.binance.com). Targeted combined stream keeps payloads small.
-    const streams = TRACKED.map((t) => `${t.symbol.toLowerCase()}@ticker`).join("/")
-    return `wss://data-stream.binance.vision/stream?streams=${streams}`
-  }, [])
-  const tickerStatus = useBinanceSocket(spotStreamUrl, handleTicker)
-
-  /* ---- Whale + Liquidation stream (futures) ---- */
   const pushLog = useCallback((entry: LogEntry) => {
     newestIdRef.current = entry.id
     setLogs((prev) => [entry, ...prev].slice(0, MAX_LOGS))
   }, [])
 
-  const handleFutures = useCallback(
-    (msg: unknown) => {
-      const m = msg as Record<string, unknown>
+  /* ---- Combined Binance SPOT stream: live prices (@ticker) + whale trades (@aggTrade) ---- */
+  const bySymbol = useMemo(() => new Map(TRACKED.map((t) => [t.symbol, t])), [])
 
-      // aggTrade -> whale detection
-      if (m.e === "aggTrade") {
-        const price = Number.parseFloat(m.p as string)
-        const qty = Number.parseFloat(m.q as string)
-        const usd = price * qty
-        if (usd < WHALE_THRESHOLD_USD) return
-        const isBuyerMaker = m.m === true // true => seller aggressor (SELL), false => buyer aggressor (BUY)
-        pushLog({
-          id: `w-${m.a}-${m.T}`,
-          time: nowTime(),
-          kind: "WHALE",
-          side: isBuyerMaker ? "SELL" : "BUY",
-          symbol: "BTC",
-          amount: qty.toFixed(3),
-          usd: fmtUSD(usd, 0, 0),
-          usdValue: usd,
+  const handleBinance = useCallback(
+    (msg: unknown) => {
+      const m = msg as { stream?: string; data?: Record<string, unknown> }
+      const data = m?.data
+      if (!data) return
+      const e = data.e as string
+
+      if (e === "24hrTicker") {
+        const sym = data.s as string
+        const cfg = bySymbol.get(sym)
+        if (!cfg) return
+        const price = Number.parseFloat(data.c as string)
+        const changePct = Number.parseFloat(data.P as string)
+        setTickers((prev) => {
+          const old = prev[sym]
+          if (!old) return prev
+          const direction: Direction = price > old.price ? "up" : price < old.price ? "down" : "flat"
+          return { ...prev, [sym]: { ...old, prevPrice: old.price, price, changePct, direction } }
         })
         return
       }
 
-      // forceOrder -> liquidation
-      if (m.e === "forceOrder" && m.o) {
-        const o = m.o as Record<string, string>
-        const price = Number.parseFloat(o.ap || o.p)
-        const qty = Number.parseFloat(o.q)
+      if (e === "aggTrade") {
+        const sym = data.s as string
+        const cfg = bySymbol.get(sym)
+        if (!cfg) return
+        const price = Number.parseFloat(data.p as string)
+        const qty = Number.parseFloat(data.q as string)
         const usd = price * qty
-        // Binance side: SELL order => a LONG got liquidated; BUY order => a SHORT got liquidated
-        const liqSide = o.S === "SELL" ? "LONG" : "SHORT"
+        if (usd < WHALE_THRESHOLD_USD) return
+        const isBuyerMaker = data.m === true // true => seller aggressor (SELL), false => buyer aggressor (BUY)
         pushLog({
-          id: `l-${o.s}-${o.T}-${o.q}`,
+          id: `w-${data.a}-${data.T}`,
           time: nowTime(),
-          kind: liqSide === "SHORT" ? "LIQ_SHORT" : "LIQ_LONG",
-          side: liqSide,
-          symbol: o.s.replace("USDT", "USDT"),
-          amount: qty.toFixed(3),
+          kind: "WHALE",
+          side: isBuyerMaker ? "SELL" : "BUY",
+          symbol: cfg.label,
+          amount: qty.toFixed(qty < 1 ? 4 : 2),
           usd: fmtUSD(usd, 0, 0),
           usdValue: usd,
         })
       }
     },
-    [pushLog],
+    [bySymbol, pushLog],
   )
 
-  const futuresSub = useMemo(
-    () => ({ method: "SUBSCRIBE", params: ["!forceOrder@arr", "btcusdt@aggTrade"], id: 1 }),
+  const binanceStreamUrl = useMemo(() => {
+    const streams = TRACKED.flatMap((t) => [`${t.symbol.toLowerCase()}@ticker`, `${t.symbol.toLowerCase()}@aggTrade`]).join(
+      "/",
+    )
+    return `wss://data-stream.binance.vision/stream?streams=${streams}`
+  }, [])
+  const tickerStatus = useReconnectingSocket(binanceStreamUrl, handleBinance)
+
+  /* ---- OKX public liquidation-orders feed (SWAP) ---- */
+  const baseByFamily = useMemo(() => {
+    const map = new Map<string, { label: string; symbol: string }>()
+    for (const t of TRACKED) {
+      if (t.base === "PAXG") continue // no gold perpetual on OKX to match against
+      map.set(`${t.base}-USDT`, { label: t.label, symbol: t.symbol })
+    }
+    return map
+  }, [])
+
+  const handleOkxLiquidation = useCallback(
+    (msg: unknown) => {
+      const m = msg as { arg?: { channel?: string }; data?: Array<Record<string, unknown>> }
+      if (m?.arg?.channel !== "liquidation-orders" || !Array.isArray(m.data)) return
+
+      for (const item of m.data) {
+        const instFamily = item.instFamily as string
+        const instId = item.instId as string
+        const cfg = baseByFamily.get(instFamily)
+        if (!cfg) continue // only show liquidations for coins we track
+
+        const ctVal = ctValMapRef.current[instId]
+        const details = (item.details as Array<Record<string, string>>) || []
+        for (const d of details) {
+          const bkPx = Number.parseFloat(d.bkPx)
+          const sz = Number.parseFloat(d.sz)
+          if (!ctVal || !Number.isFinite(bkPx) || !Number.isFinite(sz)) continue
+          const coinQty = sz * ctVal
+          const usd = coinQty * bkPx
+          // posSide "long" liquidated = forced sell (bearish); "short" liquidated = forced buy (bullish squeeze)
+          const posSide = d.posSide === "long" ? "LONG" : "SHORT"
+          pushLog({
+            id: `l-${instId}-${d.ts}-${d.sz}`,
+            time: nowTime(),
+            kind: posSide === "SHORT" ? "LIQ_SHORT" : "LIQ_LONG",
+            side: posSide,
+            symbol: cfg.label,
+            amount: `${coinQty.toFixed(coinQty < 1 ? 4 : 2)}`,
+            usd: fmtUSD(usd, 0, 0),
+            usdValue: usd,
+          })
+        }
+      }
+    },
+    [baseByFamily, pushLog],
+  )
+
+  const okxSub = useMemo(
+    () => ({ op: "subscribe", args: [{ channel: "liquidation-orders", instType: "SWAP" }] }),
     [],
   )
-  const futuresStatus = useBinanceSocket("wss://fstream.binance.com/ws", handleFutures, {
-    subscribe: futuresSub,
+  const liqStatus = useReconnectingSocket("wss://ws.okx.com:8443/ws/v5/public", handleOkxLiquidation, {
+    subscribe: okxSub,
   })
 
   const orderedTickers = TRACKED.map((t) => tickers[t.symbol])
@@ -525,8 +584,8 @@ export default function CryptoTerminal() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-4">
-              <StatusLed status={tickerStatus} label="SPOT" />
-              <StatusLed status={futuresStatus} label="FUTURES" />
+              <StatusLed status={tickerStatus} label="PRICE" />
+              <StatusLed status={liqStatus} label="LIQ" />
             </div>
           </div>
 
@@ -535,11 +594,6 @@ export default function CryptoTerminal() {
             {orderedTickers.map((t) => (
               <TickerCell key={t.symbol} t={t} />
             ))}
-            <div className="hidden flex-1 items-center px-4 md:flex">
-              <span className="text-[10px] tracking-[0.3em] text-slate-600">
-                {"> "}STREAMING BINANCE :: REAL-TIME
-              </span>
-            </div>
           </div>
 
           {/* ---------------- 2. TERMINAL LOG ---------------- */}
