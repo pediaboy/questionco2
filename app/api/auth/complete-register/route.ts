@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { generateUniqueReferralCode } from "@/lib/referral";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const email = (body.email || "").trim().toLowerCase();
     const password = (body.password || "").trim();
+    const refCode = (body.ref || "").trim().toUpperCase() || null;
 
     if (!email || password.length < 6) {
       return NextResponse.json(
@@ -98,16 +100,39 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: msg || "Gagal membuat akun." }, { status: 500 });
     }
 
+    const ownReferralCode = await generateUniqueReferralCode(email);
+
     const { error: profileErr } = await admin.from("qco2_profiles").insert({
       auth_user_id: created.user.id,
       email,
       role: "free_member",
       tier: null,
       expired_at: null,
+      referral_code: ownReferralCode,
+      referred_by: refCode,
     });
 
     if (profileErr) {
       return NextResponse.json({ success: false, message: profileErr.message }, { status: 500 });
+    }
+
+    // Credit the referrer (if the ref code is real) -- real tracked referral,
+    // not a fabricated counter. Fails silently so registration never breaks
+    // because of a bad/expired ref code.
+    if (refCode) {
+      const { data: referrer } = await admin
+        .from("qco2_profiles")
+        .select("auth_user_id")
+        .eq("referral_code", refCode)
+        .maybeSingle();
+      if (referrer?.auth_user_id) {
+        await admin.from("qco2_referrals").insert({
+          referrer_auth_user_id: referrer.auth_user_id,
+          referred_auth_user_id: created.user.id,
+          referred_email: email,
+          status: "registered",
+        });
+      }
     }
 
     return NextResponse.json({ success: true, message: "Akun berhasil dibuat. Silakan login." });

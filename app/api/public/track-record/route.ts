@@ -83,6 +83,31 @@ export async function GET(req: Request) {
     pips: r.pips,
   }));
 
+  // Per-pair breakdown + a chronological equity-curve (cumulative pips), used
+  // by the /performance page charts -- purely derived from the same real rows.
+  const byPairMap: Record<string, { wins: number; losses: number; pips: number }> = {};
+  for (const r of withPips) {
+    const bucket = byPairMap[r.pair] || { wins: 0, losses: 0, pips: 0 };
+    if (r.status === "tp_hit") bucket.wins += 1;
+    if (r.status === "sl_hit") bucket.losses += 1;
+    bucket.pips += r.pips;
+    byPairMap[r.pair] = bucket;
+  }
+  const byPair = Object.entries(byPairMap).map(([pair, v]) => ({
+    pair,
+    wins: v.wins,
+    losses: v.losses,
+    total_pips: v.pips,
+    win_rate: v.wins + v.losses > 0 ? Math.round((v.wins / (v.wins + v.losses)) * 1000) / 10 : null,
+  }));
+
+  const chronological = [...withPips].reverse();
+  let cumulative = 0;
+  const equityCurve = chronological.map((r) => {
+    cumulative += r.pips;
+    return { closed_at: r.closed_at, cumulative_pips: cumulative };
+  });
+
   return NextResponse.json({
     success: true,
     period,
@@ -94,5 +119,7 @@ export async function GET(req: Request) {
       losses,
     },
     recent,
+    by_pair: byPair,
+    equity_curve: equityCurve,
   });
 }

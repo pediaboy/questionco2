@@ -18,11 +18,17 @@ function LoginForm() {
     e.preventDefault();
     setLoading(true);
     setError("");
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
     if (error) {
       setError(error.message);
       return;
+    }
+    // Record a real login event for the Security Center's login history --
+    // fire-and-forget, never blocks the actual login redirect.
+    const token = data?.session?.access_token;
+    if (token) {
+      fetch("/api/security", { method: "POST", headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
     }
     router.push("/dashboard");
   }
