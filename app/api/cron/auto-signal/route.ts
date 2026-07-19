@@ -7,6 +7,8 @@ import { sendTelegramMessage } from "@/lib/telegram";
 export const dynamic = "force-dynamic";
 
 const CRON_SECRET = "7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d";
+const BE_THRESHOLDS = [30, 50, 70];
+const TIMEOUT_MINUTES = 60;
 
 function isWeekendWIB(): boolean {
   const now = new Date();
@@ -45,11 +47,32 @@ function buildTelegramSignalMessage(
   return `<b>LASTQUESTION.CO — AUTO SIGNAL</b>\n\n📊 PAIR   : ${pair.label}\n📈 SETUP  : ${direction}\n🎯 ENTRY  : ${fmt(entry)}\n\n🎯 TAKE PROFIT\n${tpLines}\n\n🔴 STOP LOSS : ${fmt(sl)}  (${pair.slPips} ${pair.pipLabelSuffix})\n\nFilter: VWAP ✓ • EMA200 Trend ✓ • RVOL ${rvolRatio.toFixed(2)}x\n\n⚠️ Gunakan money management. Amankan profit di TP1/TP2, hindari overtrade.\n\n#AUTOSIGNAL #${pair.label}\n\nlastquestion.store`;
 }
 
-function buildTelegramCloseMessage(pair: PairConfig, direction: "BUY" | "SELL", hitLevel: string, price: number, decimals: number) {
+function buildTelegramCloseMessage(
+  pair: PairConfig,
+  direction: "BUY" | "SELL",
+  hitLevel: string,
+  price: number,
+  decimals: number,
+  entry: number
+) {
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  const isWin = hitLevel.startsWith("tp");
-  const label = hitLevel === "sl" ? "STOP LOSS HIT" : `${hitLevel.toUpperCase()} HIT`;
-  return `<b>${isWin ? "✅" : "🔴"} ${pair.label} ${direction} — ${label}</b>\n\nHarga: ${fmt(price)}\n\n#AUTOSIGNAL #${pair.label}`;
+
+  if (hitLevel === "sl") {
+    return `🔴 <b>STOP LOSS HIT</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📉 ARAH     : ${direction}\n💥 SL HIT   : ${fmt(price)}\n\nSignal ditutup sesuai rencana risiko.\n🔓 Slot signal baru sudah terbuka.\n\n📌 Disiplin di SL adalah kunci bertahan jangka panjang.\n\n#AUTOSIGNAL #${pair.label}`;
+  }
+
+  const tpIndex = Number(hitLevel.replace("tp", ""));
+  const pipsGained = Math.round(Math.abs(price - entry) / pair.pipUnit);
+  return `✅ <b>${hitLevel.toUpperCase()} HIT — PROFIT!</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 ARAH     : ${direction}\n🎯 HARGA    : ${fmt(price)}\n💰 PROFIT   : +${pipsGained} ${pair.pipLabelSuffix}\n\n${tpIndex >= 2 ? "Selamat! Sisa posisi bisa di-trailing atau full close sesuai rencana." : "Amankan sebagian profit, geser SL ke entry untuk sisa posisi."}\n\n#AUTOSIGNAL #${pair.label}`;
+}
+
+function buildBEMessage(pair: PairConfig, threshold: number, pipsRunning: number, decimals: number) {
+  const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: decimals });
+  return `🔐 <b>AMANKAN POSISI — SET BE</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 RUNNING  : ${fmt(pipsRunning)} ${pair.pipLabelSuffix}\n🎯 TRIGGER  : ${threshold} ${pair.pipLabelSuffix}\n\n✅ Posisi sudah masuk area aman.\nGeser SL ke entry (Break Even) untuk mengunci modal.\n\n#AUTOSIGNAL #${pair.label}`;
+}
+
+function buildTimeoutMessage() {
+  return `⏳ <b>TIMEOUT 60 MENIT</b>\n━━━━━━━━━━━━━━━━\n\nRonde belum mencapai target.\n🔓 Slot signal baru sudah terbuka.\n\n📌 Tetap selektif — utamakan kualitas setup daripada kuantitas.`;
 }
 
 async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabaseAdmin>) {
@@ -110,11 +133,38 @@ async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabas
         .update({ status, hit_level: hit.level, closed_at: new Date().toISOString() })
         .eq("id", active.id);
 
-      await sendTelegramMessage(buildTelegramCloseMessage(pair, dir, hit.level, hit.price, decimals));
+      await sendTelegramMessage(buildTelegramCloseMessage(pair, dir, hit.level, hit.price, decimals, active.entry));
       return { pair: pair.key, action: "closed", hit_level: hit.level };
     }
 
-    return { pair: pair.key, action: "monitoring", live_price: livePrice };
+    // Not hit yet — check 60-minute timeout before anything else.
+    const ageMin = (Date.now() - new Date(active.created_at).getTime()) / 60000;
+    if (ageMin >= TIMEOUT_MINUTES) {
+      await admin
+        .from("qco2_signals")
+        .update({ status: "timeout", hit_level: "timeout", closed_at: new Date().toISOString() })
+        .eq("id", active.id);
+
+      await sendTelegramMessage(buildTimeoutMessage());
+      return { pair: pair.key, action: "timeout", age_min: Math.round(ageMin) };
+    }
+
+    // Check running pips for Break-Even alert thresholds (30 / 50 / 70).
+    const pipsRunning =
+      dir === "BUY" ? (livePrice - active.entry) / pair.pipUnit : (active.entry - livePrice) / pair.pipUnit;
+
+    let newLevel: number = active.be_alert_level || 0;
+    for (const threshold of BE_THRESHOLDS) {
+      if (pipsRunning >= threshold && newLevel < threshold) {
+        await sendTelegramMessage(buildBEMessage(pair, threshold, pipsRunning, decimals));
+        newLevel = threshold;
+      }
+    }
+    if (newLevel !== (active.be_alert_level || 0)) {
+      await admin.from("qco2_signals").update({ be_alert_level: newLevel }).eq("id", active.id);
+    }
+
+    return { pair: pair.key, action: "monitoring", live_price: livePrice, pips_running: Math.round(pipsRunning) };
   }
 
   // 2. No active signal — evaluate strategy for a fresh trigger.
@@ -158,6 +208,7 @@ async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabas
       pip_unit: pair.pipUnit,
       source: "auto",
       status: "active",
+      be_alert_level: 0,
     })
     .select()
     .single();
