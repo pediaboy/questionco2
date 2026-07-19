@@ -116,6 +116,18 @@ body {
 .box-glow-magenta {
   box-shadow: 0 0 0 1px rgba(176, 38, 255, 0.4), 0 0 32px rgba(176, 38, 255, 0.22);
 }
+.box-glow-emerald {
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.35), 0 0 26px rgba(52, 211, 153, 0.14);
+}
+.box-glow-rose {
+  box-shadow: 0 0 0 1px rgba(251, 113, 133, 0.35), 0 0 26px rgba(251, 113, 133, 0.14);
+}
+.text-glow-emerald {
+  text-shadow: 0 0 10px rgba(52, 211, 153, 0.55), 0 0 22px rgba(52, 211, 153, 0.25);
+}
+.text-glow-rose {
+  text-shadow: 0 0 10px rgba(251, 113, 133, 0.55), 0 0 22px rgba(251, 113, 133, 0.25);
+}
 
 /* ============ Ticker marquee ============ */
 @keyframes marquee {
