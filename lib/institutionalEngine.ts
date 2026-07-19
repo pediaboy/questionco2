@@ -335,11 +335,12 @@ export function evaluateInstitutional(m5: Candle[], m1: Candle[], newsBlackout: 
   const lastAtr = atrVals[atrVals.length - 1];
   const atrOk = !Number.isNaN(lastAtr) && lastAtr > 0;
 
-  const { macdLine, signalLine } = macdSeries(closes);
+  const { macdLine, signalLine, hist } = macdSeries(closes);
   const n = macdLine.length;
   const macdBullCross = macdLine[n - 2] <= signalLine[n - 2] && macdLine[n - 1] > signalLine[n - 1];
   const macdBearCross = macdLine[n - 2] >= signalLine[n - 2] && macdLine[n - 1] < signalLine[n - 1];
   const macdOk = direction === "BUY" ? macdBullCross : macdBearCross;
+  const macdHistAligned = direction === "BUY" ? hist[n - 1] > 0 : hist[n - 1] < 0;
 
   const bb = bollinger(closes, 20, 2);
   const lastLow = m5[m5.length - 1].low;
@@ -367,7 +368,7 @@ export function evaluateInstitutional(m5: Candle[], m1: Candle[], newsBlackout: 
   const killZoneOk = true; // already gated above — always true if we got this far
 
   const checklist: ChecklistItem[] = [
-    { label: "Trend (EMA20/50/200)", pass: true }, // gated above; direction only set when aligned
+    { label: "Trend (EMA20/50/200)", pass: true }, // hard gate above; direction only set when aligned
     { label: "BOS", pass: structureOk && structBreak.type === "BOS" },
     { label: "CHOCH", pass: structureOk && structBreak.type === "CHOCH" },
     { label: "Order Block", pass: orderBlockOk },
@@ -386,45 +387,61 @@ export function evaluateInstitutional(m5: Candle[], m1: Candle[], newsBlackout: 
     { label: "Bollinger Band", pass: bbOk },
   ];
 
-  // Structure requirement: at least one of BOS/CHOCH must be true (both simultaneously
-  // true is structurally impossible — a break is either a continuation OR a character
-  // change, never both). We still report each individually in the checklist.
-  const structureRequirementMet = structureOk;
-
-  const coreChecksExcludingStructureDuplicate = checklist.filter((c) => c.label !== "BOS" && c.label !== "CHOCH");
-  const allCorePass = structureRequirementMet && coreChecksExcludingStructureDuplicate.every((c) => c.pass);
-
-  if (!allCorePass) {
-    const failed = checklist.filter((c) => !c.pass && c.label !== (structBreak.type === "BOS" ? "CHOCH" : "BOS")).map((c) => c.label);
-    return empty(`Filter gagal: ${failed.join(", ") || "struktur BOS/CHOCH tidak valid"}`);
+  // ---- HARD gates (fundamental "is this even a valid directional SMC setup") ----
+  // Trend alignment (checked above) + a genuine structure break (BOS or CHOCH) in
+  // the trade direction are the only non-negotiable requirements. Everything else
+  // below is scored as WEIGHTED PARTIAL CREDIT, not a second all-or-nothing AND-gate
+  // — this is what "confidence >= 90%" was always supposed to mean (an overall
+  // institutional-grade score), not "every single one of 13 independent conditions
+  // happens to land in the same 5-minute candle", which is a statistically
+  // near-impossible combination and is why this engine fired zero times in the
+  // preceding 24h+ despite the workflow ticking correctly every 5 minutes.
+  if (!structureOk) {
+    return empty("Tidak ada struktur BOS/CHOCH yang valid searah trend — NO TRADE");
+  }
+  if (!atrOk) {
+    return empty("Data ATR tidak valid — NO TRADE");
   }
 
-  // ---- confidence scoring (0-100), each component normalized ----
-  const adxScore = Math.min(100, Math.max(0, ((lastAdx - 25) / 25) * 100));
-  const volScore = Math.min(100, Math.max(0, ((lastVol / avgVol20 - 1) / 1) * 100));
+  // ---- confidence scoring (0-100), each component normalized, partial credit ----
+  const adxScore = Math.min(100, Math.max(0, ((lastAdx - ADX_MIN) / 25) * 100));
+  const volScore = Math.min(100, Math.max(0, ((lastVol / Math.max(avgVol20, 1e-9) - 1) / 1) * 100));
   const rsiCenter = direction === "BUY" ? 65 : 35;
   const rsiRange = direction === "BUY" ? RSI_BUY_MAX - RSI_BUY_MIN : RSI_SELL_MAX - RSI_SELL_MIN;
   const rsiScore = Math.max(0, 100 - (Math.abs(lastRsi - rsiCenter) / (rsiRange / 2)) * 100);
   const trendGap = Math.abs(lastEma20 - lastEma200) / lastEma200;
   const trendScore = Math.min(100, trendGap * 10000);
-  const vwapDist = Math.abs(price - lastVwap) / lastAtr;
-  const vwapScore = Math.min(100, vwapDist * 50);
-  const structureScore = structBreak.type === "BOS" ? 100 : 80;
-  const macdHistScore = 85; // fresh cross already confirmed; flat bonus
+  const vwapDist = Math.abs(price - lastVwap) / Math.max(lastAtr, 1e-9);
+  const vwapScore = vwapOk ? Math.min(100, 50 + vwapDist * 50) : Math.max(0, 50 - vwapDist * 50);
+  const structureScore = structBreak.type === "BOS" ? 100 : 85;
+  const macdScore = macdOk ? 100 : macdHistAligned ? 55 : 15;
+  const orderBlockScore = orderBlockOk ? 100 : 35;
+  const fvgScore = fvgOk ? 100 : 35;
+  const liquiditySweepScore = liquiditySweepOk ? 100 : 25;
+  const zoneScore = zoneOk ? 100 : zone === "equilibrium" ? 55 : 15;
+  const cvdScore = cvdOk ? 100 : cvdDirOk ? 45 : 15;
+  const bbScore = bbOk ? 100 : 40;
 
   const weights: [number, number][] = [
-    [adxScore, 0.15],
-    [volScore, 0.12],
-    [rsiScore, 0.15],
-    [trendScore, 0.15],
-    [vwapScore, 0.13],
-    [structureScore, 0.15],
-    [macdHistScore, 0.15],
+    [trendScore, 0.1],
+    [structureScore, 0.12],
+    [orderBlockScore, 0.05],
+    [fvgScore, 0.05],
+    [liquiditySweepScore, 0.08],
+    [zoneScore, 0.08],
+    [vwapScore, 0.1],
+    [macdScore, 0.1],
+    [rsiScore, 0.12],
+    [adxScore, 0.1],
+    [volScore, 0.05],
+    [cvdScore, 0.03],
+    [bbScore, 0.02],
   ];
   const confidence = Math.round(weights.reduce((sum, [score, w]) => sum + score * w, 0));
 
   if (confidence < CONFIDENCE_MIN) {
-    return empty(`Confidence ${confidence}% dibawah minimal ${CONFIDENCE_MIN}%`);
+    const weak = checklist.filter((c) => !c.pass && c.label !== "BOS" && c.label !== "CHOCH").map((c) => c.label);
+    return empty(`Confidence ${confidence}% dibawah minimal ${CONFIDENCE_MIN}% (lemah di: ${weak.join(", ") || "kombinasi minor"})`);
   }
 
   const reasoning =
