@@ -9,12 +9,25 @@ export default function KalenderPage() {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const widgetContainer = containerRef.current;
-    // Clear any previous children
-    widgetContainer.innerHTML = "";
+    const outer = containerRef.current;
+    // Clear any previous children (handles remounts / fast refresh cleanly).
+    outer.innerHTML = "";
 
-    const scriptContainer = document.createElement("div");
-    scriptContainer.className = "tradingview-widget-container__widget w-full h-[500px]";
+    // Official TradingView structure: a `.tradingview-widget-container` wrapper
+    // is required — the widget's own JS measures/sizes itself against THIS
+    // class specifically. Without it, the widget falls back to an unconstrained
+    // auto height and expands to fit its full internal calendar list instead of
+    // the fixed height we ask for, which is what was causing the huge blank gap.
+    const wrapper = document.createElement("div");
+    wrapper.className = "tradingview-widget-container";
+    wrapper.style.height = "460px";
+    wrapper.style.width = "100%";
+    wrapper.style.overflow = "hidden";
+
+    const widgetDiv = document.createElement("div");
+    widgetDiv.className = "tradingview-widget-container__widget";
+    widgetDiv.style.height = "100%";
+    widgetDiv.style.width = "100%";
 
     const script = document.createElement("script");
     script.type = "text/javascript";
@@ -22,21 +35,20 @@ export default function KalenderPage() {
     script.async = true;
     script.innerHTML = JSON.stringify({
       width: "100%",
-      height: "500",
+      height: "460",
       colorTheme: "dark",
-      isTransparent: true,
+      isTransparent: false,
       locale: "id",
       importanceFilter: "-1,0,1",
       countryFilter: "us,eu,gb,jp,id",
     });
 
-    widgetContainer.appendChild(scriptContainer);
-    widgetContainer.appendChild(script);
+    wrapper.appendChild(widgetDiv);
+    wrapper.appendChild(script);
+    outer.appendChild(wrapper);
 
     return () => {
-      if (widgetContainer) {
-        widgetContainer.innerHTML = "";
-      }
+      outer.innerHTML = "";
     };
   }, []);
 
@@ -88,10 +100,11 @@ export default function KalenderPage() {
           </span>
         </div>
 
-        {/* This is where the widget renders */}
-        <div 
-          ref={containerRef} 
-          className="w-full min-h-[500px] overflow-hidden bg-black/30 rounded"
+        {/* This is where the widget renders — fixed height + overflow hidden so
+            the embedded iframe can never blow out the layout with blank space. */}
+        <div
+          ref={containerRef}
+          className="w-full h-[460px] overflow-hidden bg-black/30 rounded"
         />
       </div>
 
