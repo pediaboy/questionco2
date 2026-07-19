@@ -2,7 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
-import { Lock, TrendingUp, TrendingDown } from "lucide-react";
+import { Lock, TrendingUp, TrendingDown, Zap } from "lucide-react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import { useSignals } from "@/lib/useSignals";
 
@@ -22,7 +22,7 @@ export default function SinyalPage() {
         <h2 className="text-xl font-bold font-display text-white mt-1">
           Sinyal <span className="text-cyan-300 text-glow-cyan">Trading</span>
         </h2>
-        <p className="text-xs text-[#94A3B8] mt-1">Sinyal aktif dari tim analis LASTQUESTION.CO.</p>
+        <p className="text-xs text-[#94A3B8] mt-1">Sinyal aktif dari tim analis &amp; sistem Auto Signal LASTQUESTION.CO.</p>
       </div>
 
       {isLoading ? (
@@ -43,6 +43,9 @@ export default function SinyalPage() {
         <div className="space-y-4">
           {activeItems.map((sig) => {
             const isBuy = sig.direction === "BUY";
+            const tps = [sig.take_profit, sig.tp2, sig.tp3, sig.tp4].filter(
+              (v): v is number => v !== null && v !== undefined
+            );
             return (
               <div
                 key={sig.id}
@@ -53,7 +56,14 @@ export default function SinyalPage() {
 
                 {/* Header row */}
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-display font-bold text-white text-base tracking-wide">{sig.pair}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-display font-bold text-white text-base tracking-wide">{sig.pair}</h3>
+                    {sig.source === "auto" && (
+                      <span className="flex items-center gap-1 text-[9px] font-bold font-mono px-1.5 py-0.5 border text-yellow-400 border-yellow-500/40 bg-yellow-500/10">
+                        <Zap size={9} /> AUTO
+                      </span>
+                    )}
+                  </div>
                   <span
                     className={`flex items-center gap-1 text-[10px] font-bold tracking-widest font-mono px-2 py-1 border ${
                       isBuy
@@ -67,23 +77,38 @@ export default function SinyalPage() {
                 </div>
 
                 {/* Values */}
-                <div className="relative grid grid-cols-3 gap-2 text-center">
+                <div className="relative">
                   {!isVip && (
                     <div className="absolute inset-0 z-10 flex items-center justify-center">
                       <Lock size={30} className="text-yellow-500 drop-shadow-[0_0_8px_rgba(234,179,8,0.5)]" />
                     </div>
                   )}
-                  <div className={!isVip ? "blur-md select-none" : ""}>
-                    <span className="text-[9px] text-slate-500 font-mono block uppercase">Entry</span>
-                    <span className="text-white font-mono font-bold text-sm">{sig.entry}</span>
+                  <div className={`grid grid-cols-2 gap-2 text-center mb-2 ${!isVip ? "blur-md select-none" : ""}`}>
+                    <div>
+                      <span className="text-[9px] text-slate-500 font-mono block uppercase">Entry</span>
+                      <span className="text-white font-mono font-bold text-sm">{sig.entry}</span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-slate-500 font-mono block uppercase">Stop Loss</span>
+                      <span className="text-rose-400 font-mono font-bold text-sm">{sig.stop_loss}</span>
+                    </div>
                   </div>
-                  <div className={!isVip ? "blur-md select-none" : ""}>
-                    <span className="text-[9px] text-slate-500 font-mono block uppercase">Stop Loss</span>
-                    <span className="text-rose-400 font-mono font-bold text-sm">{sig.stop_loss}</span>
-                  </div>
-                  <div className={!isVip ? "blur-md select-none" : ""}>
-                    <span className="text-[9px] text-slate-500 font-mono block uppercase">Take Profit</span>
-                    <span className="text-emerald-400 font-mono font-bold text-sm">{sig.take_profit}</span>
+                  <div
+                    className={`grid gap-2 text-center ${!isVip ? "blur-md select-none" : ""} ${
+                      tps.length === 1 ? "grid-cols-1" : tps.length === 2 ? "grid-cols-2" : tps.length === 3 ? "grid-cols-3" : "grid-cols-4"
+                    }`}
+                  >
+                    {tps.map((tp, i) => (
+                      <div key={i}>
+                        <span className="text-[9px] text-slate-500 font-mono block uppercase">TP{i + 1}</span>
+                        <span
+                          className="font-mono font-bold text-sm"
+                          style={{ color: `rgba(52, 211, 153, ${1 - i * 0.15})` }}
+                        >
+                          {tp}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>

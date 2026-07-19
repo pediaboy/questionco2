@@ -10,6 +10,10 @@ export interface SignalItem {
   entry: number;
   stop_loss: number;
   take_profit: number;
+  tp2?: number | null;
+  tp3?: number | null;
+  tp4?: number | null;
+  source?: string;
   status: string;
   created_at: string;
 }

@@ -12,6 +12,11 @@ type Signal = {
   entry: number;
   stop_loss: number;
   take_profit: number;
+  tp2?: number | null;
+  tp3?: number | null;
+  tp4?: number | null;
+  source?: string;
+  hit_level?: string | null;
   status: string;
   created_at: string;
 };
@@ -254,6 +259,11 @@ export default function SinyalAdminPage() {
                   <span className={`text-[10px] font-bold font-mono px-2 py-0.5 border ${meta.color}`}>
                     {meta.label}
                   </span>
+                  {sig.source === "auto" && (
+                    <span className="text-[10px] font-bold font-mono px-2 py-0.5 border text-yellow-400 border-yellow-500/40 bg-yellow-500/10">
+                      AUTO
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3">
                   <button onClick={() => editSignal(sig)} className="text-cyan-300 hover:text-cyan-200">
@@ -275,9 +285,31 @@ export default function SinyalAdminPage() {
                   <span className="text-rose-400 font-mono font-bold text-sm">{sig.stop_loss}</span>
                 </div>
                 <div>
-                  <span className="text-[9px] text-slate-500 font-mono block uppercase">Take Profit</span>
+                  <span className="text-[9px] text-slate-500 font-mono block uppercase">TP1</span>
                   <span className="text-emerald-400 font-mono font-bold text-sm">{sig.take_profit}</span>
                 </div>
+                {(sig.tp2 || sig.tp3 || sig.tp4) && (
+                  <>
+                    {sig.tp2 && (
+                      <div>
+                        <span className="text-[9px] text-slate-500 font-mono block uppercase">TP2</span>
+                        <span className="text-emerald-400/80 font-mono font-bold text-sm">{sig.tp2}</span>
+                      </div>
+                    )}
+                    {sig.tp3 && (
+                      <div>
+                        <span className="text-[9px] text-slate-500 font-mono block uppercase">TP3</span>
+                        <span className="text-emerald-400/70 font-mono font-bold text-sm">{sig.tp3}</span>
+                      </div>
+                    )}
+                    {sig.tp4 && (
+                      <div>
+                        <span className="text-[9px] text-slate-500 font-mono block uppercase">TP4</span>
+                        <span className="text-emerald-400/60 font-mono font-bold text-sm">{sig.tp4}</span>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
 
               <div className="flex gap-1.5 flex-wrap">
