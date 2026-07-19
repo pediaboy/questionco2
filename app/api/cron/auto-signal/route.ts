@@ -209,6 +209,7 @@ async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabas
       source: "auto",
       status: "active",
       be_alert_level: 0,
+      audience: "vip",
     })
     .select()
     .single();

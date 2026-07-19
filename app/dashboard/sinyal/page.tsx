@@ -30,6 +30,8 @@ export default function SinyalPage() {
   const { items, isLoading, isError } = useSignals();
   const activeItems = (items || []).filter((s) => s.status === "active");
 
+  const isLocked = (sig: { audience?: string }) => sig.audience !== "public" && !isVip;
+
   const [, setTick] = useState(0);
   useEffect(() => {
     const iv = setInterval(() => setTick((t) => t + 1), 1000);
@@ -111,6 +113,11 @@ export default function SinyalPage() {
                             <Zap size={9} /> AUTO
                           </span>
                         )}
+                        {sig.audience === "public" && (
+                          <span className="text-[9px] font-bold font-mono px-1.5 py-0.5 border text-cyan-400 border-cyan-500/40 bg-cyan-500/10">
+                            PUBLIC
+                          </span>
+                        )}
                       </div>
                       <span
                         className={`flex items-center gap-1.5 text-xs font-bold tracking-[0.15em] font-mono px-3 py-1.5 chamfer-sm border ${
@@ -138,7 +145,7 @@ export default function SinyalPage() {
 
                     {/* Values */}
                     <div className="relative">
-                      {!isVip && (
+                      {isLocked(sig) && (
                         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/30 backdrop-blur-[2px]">
                           <Lock size={26} className="text-yellow-500 drop-shadow-[0_0_8px_rgba(234,179,8,0.6)]" />
                           <span className="text-[9px] font-mono uppercase tracking-[0.2em] text-yellow-500/80 border border-dashed border-yellow-500/40 px-2 py-1 chamfer-sm">
@@ -147,7 +154,7 @@ export default function SinyalPage() {
                         </div>
                       )}
 
-                      <div className={`grid grid-cols-2 gap-2 mb-3 ${!isVip ? "blur-md select-none" : ""}`}>
+                      <div className={`grid grid-cols-2 gap-2 mb-3 ${isLocked(sig) ? "blur-md select-none" : ""}`}>
                         <div className="chamfer-sm border border-cyan-400/20 bg-cyan-400/[0.03] p-2.5 text-center">
                           <span className="flex items-center justify-center gap-1 text-[8px] text-cyan-400/70 font-mono uppercase tracking-widest mb-1">
                             <Crosshair size={9} /> Entry
@@ -163,7 +170,7 @@ export default function SinyalPage() {
                       </div>
 
                       <div
-                        className={`grid gap-2 ${!isVip ? "blur-md select-none" : ""} ${
+                        className={`grid gap-2 ${isLocked(sig) ? "blur-md select-none" : ""} ${
                           tps.length === 1 ? "grid-cols-1" : tps.length === 2 ? "grid-cols-2" : tps.length === 3 ? "grid-cols-3" : "grid-cols-4"
                         }`}
                       >
@@ -197,7 +204,7 @@ export default function SinyalPage() {
         </div>
       )}
 
-      {!isVip && activeItems.length > 0 && (
+      {!isVip && activeItems.some(isLocked) && (
         <Link
           href="/dashboard/upgrade"
           className="chamfer-btn mt-6 w-full flex items-center justify-center py-4 border border-yellow-500 text-yellow-500 bg-yellow-500/5 hover:bg-yellow-500/10 active:scale-[0.98] transition-all font-mono text-xs font-bold tracking-widest"

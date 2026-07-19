@@ -14,6 +14,7 @@ export interface SignalItem {
   tp3?: number | null;
   tp4?: number | null;
   source?: string;
+  audience?: string;
   status: string;
   created_at: string;
 }

@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
     const stop_loss = Number(body.stop_loss);
     const take_profit = Number(body.take_profit);
     const status = body.status || "active";
+    const audience = body.audience === "public" ? "public" : "vip";
 
     if (!pair) return NextResponse.json({ success: false, error: "Pair wajib diisi." }, { status: 400 });
     if (Number.isNaN(entry) || Number.isNaN(stop_loss) || Number.isNaN(take_profit)) {
@@ -34,7 +35,7 @@ export async function POST(req: NextRequest) {
     const admin = getSupabaseAdmin();
     const { data, error } = await admin
       .from("qco2_signals")
-      .insert({ pair, direction, entry, stop_loss, take_profit, status })
+      .insert({ pair, direction, entry, stop_loss, take_profit, status, audience })
       .select()
       .single();
 
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, pair, direction, entry, stop_loss, take_profit, status } = body as {
+    const { id, pair, direction, entry, stop_loss, take_profit, status, audience } = body as {
       id?: string;
       pair?: string;
       direction?: "BUY" | "SELL";
@@ -60,6 +61,7 @@ export async function PATCH(req: NextRequest) {
       stop_loss?: number;
       take_profit?: number;
       status?: string;
+      audience?: string;
     };
 
     if (!id) return NextResponse.json({ success: false, error: "Missing id" }, { status: 400 });
@@ -71,6 +73,7 @@ export async function PATCH(req: NextRequest) {
     if (stop_loss !== undefined) update.stop_loss = Number(stop_loss);
     if (take_profit !== undefined) update.take_profit = Number(take_profit);
     if (status !== undefined) update.status = status;
+    if (audience !== undefined) update.audience = audience;
 
     const admin = getSupabaseAdmin();
     const { data, error } = await admin
