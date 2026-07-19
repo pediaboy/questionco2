@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { fetchOkxCandles, fetchOkxLastPrice, evaluateStrategy, pipsToPrice } from "@/lib/signalEngine";
+import { fetchOkxCandles, fetchOkxLastPrice } from "@/lib/signalEngine";
+import { evaluateInstitutional } from "@/lib/institutionalEngine";
+import { isNewsBlackout } from "@/lib/newsFilter";
 import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
 import { sendTelegramMessage } from "@/lib/telegram";
 
@@ -9,6 +11,8 @@ export const dynamic = "force-dynamic";
 const CRON_SECRET = "7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d";
 const BE_THRESHOLDS = [30, 50, 70];
 const TIMEOUT_MINUTES = 60;
+const ATR_SL_MULTIPLIER = 1.5;
+const RR_TARGETS = [2, 3, 4]; // TP1=RR1:2 (minimum), TP2=RR1:3 (ideal), TP3=RR1:4 (extended)
 
 function isWeekendWIB(): boolean {
   const now = new Date();
@@ -18,7 +22,6 @@ function isWeekendWIB(): boolean {
 }
 
 async function getLiveXauUsd(): Promise<number> {
-  // Reuse the same TradingView scanner call the site's own /api/ticker uses.
   const res = await fetch("https://scanner.tradingview.com/cfd/scan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -29,22 +32,38 @@ async function getLiveXauUsd(): Promise<number> {
   return Number(json?.data?.[0]?.d?.[0]);
 }
 
-function buildTelegramSignalMessage(
+// ---------- institutional-format Telegram message ----------
+
+function buildInstitutionalSignalMessage(
   pair: PairConfig,
   direction: "BUY" | "SELL",
   entry: number,
-  tps: number[],
   sl: number,
+  tps: number[],
   decimals: number,
-  rvolRatio: number
+  trend: "up" | "down" | "none",
+  confidence: number,
+  reasoning: string,
+  checklist: { label: string; pass: boolean }[]
 ) {
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  const rrLabels = ["1:1", "1:2", "1:4"];
-  const tpLines = tps
-    .map((tp, i) => `TP${i + 1} → ${fmt(tp)}  (${pair.tpPips[i]} ${pair.pipLabelSuffix} • RR ${rrLabels[i]})`)
+  const checklistLines = checklist
+    .filter((c) => !["Trend (EMA20/50/200)"].includes(c.label))
+    .map((c) => `${c.label} ${c.pass ? "✔" : "✘"}`)
     .join("\n");
 
-  return `<b>LASTQUESTION.CO — AUTO SIGNAL</b>\n\n📊 PAIR   : ${pair.label}\n📈 SETUP  : ${direction}\n🎯 ENTRY  : ${fmt(entry)}\n\n🎯 TAKE PROFIT\n${tpLines}\n\n🔴 STOP LOSS : ${fmt(sl)}  (${pair.slPips} ${pair.pipLabelSuffix})\n\nFilter: VWAP ✓ • EMA200 Trend ✓ • RVOL ${rvolRatio.toFixed(2)}x\n\n⚠️ Gunakan money management. Amankan profit di TP1/TP2, hindari overtrade.\n\n#AUTOSIGNAL #${pair.label}\n\nlastquestion.store`;
+  return (
+    `🚨 <b>SCALPING SIGNAL</b>\n━━━━━━━━━━━━━━━━\n\n` +
+    `Pair : <b>${pair.label}</b>\nTimeframe : M5\nTrend : <b>${trend.toUpperCase()}</b>\n\n` +
+    `Signal : <b>${direction}</b>\n\n` +
+    `Entry : <b>${fmt(entry)}</b>\nStoploss : <b>${fmt(sl)}</b>\n` +
+    `Take Profit 1 : <b>${fmt(tps[0])}</b>  (RR 1:${RR_TARGETS[0]})\n` +
+    `Take Profit 2 : <b>${fmt(tps[1])}</b>  (RR 1:${RR_TARGETS[1]})\n` +
+    `Take Profit 3 : <b>${fmt(tps[2])}</b>  (RR 1:${RR_TARGETS[2]})\n\n` +
+    `Risk Reward : 1:${RR_TARGETS[0]} - 1:${RR_TARGETS[2]}\nConfidence : <b>${confidence}%</b>\n\n` +
+    `Alasan : ${reasoning}\n\n` +
+    `Checklist :\n${checklistLines}\n\n#${pair.label}\n\nlastquestion.store`
+  );
 }
 
 function buildTelegramCloseMessage(
@@ -58,24 +77,24 @@ function buildTelegramCloseMessage(
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 
   if (hitLevel === "sl") {
-    return `🔴 <b>STOP LOSS HIT</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📉 ARAH     : ${direction}\n💥 SL HIT   : ${fmt(price)}\n\nSignal ditutup sesuai rencana risiko.\n🔓 Slot signal baru sudah terbuka.\n\n📌 Disiplin di SL adalah kunci bertahan jangka panjang.\n\n#AUTOSIGNAL #${pair.label}`;
+    return `🔴 <b>STOP LOSS HIT</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📉 ARAH     : ${direction}\n💥 SL HIT   : ${fmt(price)}\n\nSignal ditutup sesuai rencana risiko.\n🔓 Slot signal baru sudah terbuka.\n\n📌 Disiplin di SL adalah kunci bertahan jangka panjang.\n\n#${pair.label}`;
   }
 
   const tpIndex = Number(hitLevel.replace("tp", ""));
-  const pipsGained = Math.round(Math.abs(price - entry) / pair.pipUnit);
-  return `✅ <b>${hitLevel.toUpperCase()} HIT — PROFIT!</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 ARAH     : ${direction}\n🎯 HARGA    : ${fmt(price)}\n💰 PROFIT   : +${pipsGained} ${pair.pipLabelSuffix}\n\n${tpIndex >= 2 ? "Selamat! Sisa posisi bisa di-trailing atau full close sesuai rencana." : "Amankan sebagian profit, geser SL ke entry untuk sisa posisi."}\n\n#AUTOSIGNAL #${pair.label}`;
+  const pipsGained = Math.abs(price - entry);
+  return `✅ <b>${hitLevel.toUpperCase()} HIT — PROFIT!</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 ARAH     : ${direction}\n🎯 HARGA    : ${fmt(price)}\n💰 PROFIT   : +${fmt(pipsGained)} ${pair.pipLabelSuffix}\n\n${tpIndex >= 2 ? "Selamat! Sisa posisi bisa di-trailing atau full close sesuai rencana." : "Amankan sebagian profit, geser SL ke entry untuk sisa posisi."}\n\n#${pair.label}`;
 }
 
 function buildBEMessage(pair: PairConfig, threshold: number, pipsRunning: number, decimals: number) {
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: decimals });
-  return `🔐 <b>AMANKAN POSISI — SET BE</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 RUNNING  : ${fmt(pipsRunning)} ${pair.pipLabelSuffix}\n🎯 TRIGGER  : ${threshold} ${pair.pipLabelSuffix}\n\n✅ Posisi sudah masuk area aman.\nGeser SL ke entry (Break Even) untuk mengunci modal.\n\n#AUTOSIGNAL #${pair.label}`;
+  return `🔐 <b>AMANKAN POSISI — SET BE</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 RUNNING  : ${fmt(pipsRunning)} ${pair.pipLabelSuffix}\n🎯 TRIGGER  : ${threshold} ${pair.pipLabelSuffix}\n\n✅ Posisi sudah masuk area aman.\nGeser SL ke entry (Break Even) untuk mengunci modal.\n\n#${pair.label}`;
 }
 
 function buildTimeoutMessage() {
   return `⏳ <b>TIMEOUT 60 MENIT</b>\n━━━━━━━━━━━━━━━━\n\nRonde belum mencapai target.\n🔓 Slot signal baru sudah terbuka.\n\n📌 Tetap selektif — utamakan kualitas setup daripada kuantitas.`;
 }
 
-async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabaseAdmin>) {
+async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabaseAdmin>, newsBlackout: boolean) {
   const decimals = pair.pipUnit < 1 ? 2 : 0;
 
   if (pair.skipWeekends && isWeekendWIB()) {
@@ -167,32 +186,29 @@ async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabas
     return { pair: pair.key, action: "monitoring", live_price: livePrice, pips_running: Math.round(pipsRunning) };
   }
 
-  // 2. No active signal — evaluate strategy for a fresh trigger.
-  // M5 needs enough history for a real EMA200 read; M1 needs enough for RVOL(20).
+  // 2. No active signal — evaluate the institutional SMC strategy for a fresh trigger.
   const [m5, m1] = await Promise.all([
     fetchOkxCandles(pair.dataInstId, "5m", 300),
     fetchOkxCandles(pair.dataInstId, "1m", 100),
   ]);
 
-  const result = evaluateStrategy(m5, m1);
+  const result = evaluateInstitutional(m5, m1, newsBlackout);
   if (!result.direction) {
     return {
       pair: pair.key,
       action: "no_trigger",
-      reason: result.reason,
-      m5_trend: result.m5Trend,
-      vwap: result.vwapValue,
-      ema200: result.ema200Value,
-      rvol_ratio: result.rvolRatio,
+      reason: result.blockReason || result.reasoning || "no_trigger",
+      confidence: result.confidence,
     };
   }
 
   const entry = livePrice;
+  const slDistance = result.atr * ATR_SL_MULTIPLIER;
+  const sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;
   const tps =
     result.direction === "BUY"
-      ? pair.tpPips.map((p) => entry + pipsToPrice(p, pair.pipUnit))
-      : pair.tpPips.map((p) => entry - pipsToPrice(p, pair.pipUnit));
-  const sl = result.direction === "BUY" ? entry - pipsToPrice(pair.slPips, pair.pipUnit) : entry + pipsToPrice(pair.slPips, pair.pipUnit);
+      ? RR_TARGETS.map((rr) => entry + slDistance * rr)
+      : RR_TARGETS.map((rr) => entry - slDistance * rr);
 
   const { data: created, error } = await admin
     .from("qco2_signals")
@@ -210,15 +226,20 @@ async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabas
       status: "active",
       be_alert_level: 0,
       audience: "vip",
+      confidence: result.confidence,
+      reasoning: result.reasoning,
+      strategy_mode: "institutional_smc_v3",
     })
     .select()
     .single();
 
   if (error) return { pair: pair.key, action: "error", error: error.message };
 
-  await sendTelegramMessage(buildTelegramSignalMessage(pair, result.direction, entry, tps, sl, decimals, result.rvolRatio));
+  await sendTelegramMessage(
+    buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, result.trend, result.confidence, result.reasoning, result.checklist)
+  );
 
-  return { pair: pair.key, action: "created", id: created.id, direction: result.direction, entry };
+  return { pair: pair.key, action: "created", id: created.id, direction: result.direction, entry, confidence: result.confidence };
 }
 
 export async function POST(req: NextRequest) {
@@ -228,14 +249,15 @@ export async function POST(req: NextRequest) {
   }
 
   const admin = getSupabaseAdmin();
+  const newsBlackout = await isNewsBlackout();
   const results = [];
   for (const pair of SIGNAL_PAIRS) {
     try {
-      results.push(await processPair(pair, admin));
+      results.push(await processPair(pair, admin, newsBlackout));
     } catch (err) {
       results.push({ pair: pair.key, action: "error", error: err instanceof Error ? err.message : "unknown" });
     }
   }
 
-  return NextResponse.json({ success: true, results });
+  return NextResponse.json({ success: true, news_blackout: newsBlackout, results });
 }
