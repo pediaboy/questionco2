@@ -45,3 +45,24 @@ export async function isNewsBlackout(now: Date = new Date()): Promise<boolean> {
   }
   return false;
 }
+
+export interface UpcomingEvent {
+  title: string;
+  country: string;
+  date: string;
+}
+
+// Returns the next upcoming High-impact event (or null if none this week / feed down).
+// Used by the public homepage's "Kalender Ekonomi" preview card.
+export async function getUpcomingHighImpactEvent(now: Date = new Date()): Promise<UpcomingEvent | null> {
+  const events = await getCalendar();
+  const nowMs = now.getTime();
+  const upcoming = events
+    .filter((ev) => ev.impact === "High")
+    .map((ev) => ({ ...ev, ms: new Date(ev.date).getTime() }))
+    .filter((ev) => !Number.isNaN(ev.ms) && ev.ms >= nowMs)
+    .sort((a, b) => a.ms - b.ms);
+  if (upcoming.length === 0) return null;
+  const next = upcoming[0];
+  return { title: next.title, country: next.country, date: next.date };
+}

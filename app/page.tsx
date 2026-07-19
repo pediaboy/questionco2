@@ -1,6 +1,7 @@
 import Header from "@/components/Header";
 import HeroClassic from "@/components/HeroClassic";
 import HeroFeatures from "@/components/HeroFeatures";
+import MarketIntel from "@/components/MarketIntel";
 import Methodology from "@/components/Methodology";
 import FeatureGatingList from "@/components/FeatureGatingList";
 import ComparisonSection from "@/components/ComparisonSection";
@@ -17,6 +18,7 @@ export default function Home() {
       <main>
         <HeroClassic />
         <HeroFeatures />
+        <MarketIntel />
         <Methodology />
         <FeatureGatingList />
         <ComparisonSection />
