@@ -1,51 +1,17 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React from "react";
 import Link from "next/link";
 import { Lock, TrendingUp, TrendingDown } from "lucide-react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
-
-interface Signal {
-  id: string;
-  pair: string;
-  direction: "BUY" | "SELL";
-  entry: string;
-  stop_loss: string;
-  take_profit: string;
-  status: string;
-  created_at: string;
-}
+import { useSignals } from "@/lib/useSignals";
 
 export default function SinyalPage() {
   const { profile } = useMemberAuth();
   const isVip = !!profile?.is_vip;
 
-  const [items, setItems] = useState<Signal[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    async function fetchSignals() {
-      try {
-        const res = await fetch("/api/member/signals");
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && Array.isArray(data.items)) {
-            setItems(data.items);
-          } else {
-            setError(true);
-          }
-        } else {
-          setError(true);
-        }
-      } catch {
-        setError(true);
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchSignals();
-  }, []);
+  const { items, isLoading, isError } = useSignals();
+  const activeItems = (items || []).filter((s) => s.status === "active");
 
   return (
     <div>
@@ -59,23 +25,23 @@ export default function SinyalPage() {
         <p className="text-xs text-[#94A3B8] mt-1">Sinyal aktif dari tim analis LASTQUESTION.CO.</p>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="h-40 bg-black/40 border border-white/5 chamfer-sm animate-pulse" />
           ))}
         </div>
-      ) : error ? (
+      ) : isError ? (
         <div className="text-center py-8 bg-[#0f172a]/50 border border-dashed border-red-500/20 chamfer-sm">
           <span className="text-xs text-red-400 font-mono">[ ERROR LOADING SIGNALS ]</span>
         </div>
-      ) : items.length === 0 ? (
+      ) : activeItems.length === 0 ? (
         <div className="text-center py-12 bg-[#0f172a]/30 border border-dashed border-white/10 chamfer-sm">
           <span className="text-xs text-slate-500 font-mono">[ TIDAK ADA SINYAL AKTIF ]</span>
         </div>
       ) : (
         <div className="space-y-4">
-          {items.map((sig) => {
+          {activeItems.map((sig) => {
             const isBuy = sig.direction === "BUY";
             return (
               <div
@@ -126,7 +92,7 @@ export default function SinyalPage() {
         </div>
       )}
 
-      {!isVip && items.length > 0 && (
+      {!isVip && activeItems.length > 0 && (
         <Link
           href="/dashboard/upgrade"
           className="chamfer-btn mt-6 w-full flex items-center justify-center py-4 border border-yellow-500 text-yellow-500 bg-yellow-500/5 hover:bg-yellow-500/10 active:scale-[0.98] transition-all font-mono text-xs font-bold tracking-widest"

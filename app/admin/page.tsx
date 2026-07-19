@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { ShieldCheck, RefreshCw, Check, X, RotateCcw, Edit2, Trash2, BarChart3, UserPlus, KeyRound, Trophy } from "lucide-react";
+import { ShieldCheck, RefreshCw, Check, X, RotateCcw, Edit2, Trash2, BarChart3, UserPlus, KeyRound, Trophy, Radio } from "lucide-react";
 import { isAdminAuthed, setAdminAuthed, ADMIN_USER, ADMIN_PASS } from "@/lib/adminAuth";
 
 type Invoice = {
@@ -383,6 +383,9 @@ export default function AdminPage() {
         <div className="flex items-center gap-4">
           <Link href="/admin/leaderboard" className="text-yellow-400 flex items-center gap-1.5 text-xs">
             <Trophy size={14} /> Leaderboard
+          </Link>
+          <Link href="/admin/sinyal" className="text-emerald-400 flex items-center gap-1.5 text-xs">
+            <Radio size={14} /> Sinyal
           </Link>
           <button onClick={load} className="text-cyan-300 flex items-center gap-1.5 text-xs">
             <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh
