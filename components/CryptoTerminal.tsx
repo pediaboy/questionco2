@@ -26,6 +26,9 @@
 import type React from "react"
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { AnimatePresence, motion } from "framer-motion"
+import { useReconnectingSocket } from "@/lib/useReconnectingSocket"
+import { TERMINAL_PAIRS, priceDecimalsFor } from "@/lib/terminalPairs"
+import OrderBookPanel from "@/components/OrderBookPanel"
 
 /* -------------------------------------------------------------------------- */
 /*  TYPES                                                                     */
@@ -62,22 +65,6 @@ interface LogEntry {
 const WHALE_THRESHOLD_USD = 50_000
 const MAX_LOGS = 30
 
-// XAU first (per site convention: gold leads the ticker bar), then majors, then popular alts.
-// symbol = Binance spot pair used for the live price feed. base = short coin code used to
-// match against OKX's instFamily (e.g. "BTC-USDT") for the liquidation feed.
-const TRACKED: { symbol: string; label: string; base: string }[] = [
-  { symbol: "PAXGUSDT", label: "XAU", base: "PAXG" }, // gold proxy, no OKX perp match -> no liquidation feed for XAU
-  { symbol: "BTCUSDT", label: "BTC", base: "BTC" },
-  { symbol: "ETHUSDT", label: "ETH", base: "ETH" },
-  { symbol: "SOLUSDT", label: "SOL", base: "SOL" },
-  { symbol: "BNBUSDT", label: "BNB", base: "BNB" },
-  { symbol: "XRPUSDT", label: "XRP", base: "XRP" },
-  { symbol: "DOGEUSDT", label: "DOGE", base: "DOGE" },
-  { symbol: "ADAUSDT", label: "ADA", base: "ADA" },
-  { symbol: "AVAXUSDT", label: "AVAX", base: "AVAX" },
-  { symbol: "LINKUSDT", label: "LINK", base: "LINK" },
-]
-
 const COLOR = {
   green: "#00FF66",
   red: "#FF0044",
@@ -105,90 +92,10 @@ function nowTime() {
     .join(":")
 }
 
-function priceDecimals(symbol: string) {
-  if (symbol.startsWith("XRP") || symbol.startsWith("ADA")) return 4
-  if (symbol.startsWith("DOGE")) return 5
-  return 2
-}
-
 /* -------------------------------------------------------------------------- */
 /*  RECONNECTING WEBSOCKET HOOK                                               */
 /* -------------------------------------------------------------------------- */
 
-function useReconnectingSocket(
-  url: string,
-  onMessage: (data: unknown) => void,
-  opts?: { subscribe?: Record<string, unknown> },
-) {
-  const [status, setStatus] = useState<"connecting" | "online" | "offline">("connecting")
-  const onMessageRef = useRef(onMessage)
-  onMessageRef.current = onMessage
-
-  const subscribeRef = useRef(opts?.subscribe)
-  subscribeRef.current = opts?.subscribe
-
-  useEffect(() => {
-    let ws: WebSocket | null = null
-    let retry = 0
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-    let closedByUnmount = false
-
-    const connect = () => {
-      setStatus((s) => (s === "online" ? s : "connecting"))
-      try {
-        ws = new WebSocket(url)
-      } catch {
-        scheduleReconnect()
-        return
-      }
-
-      ws.onopen = () => {
-        retry = 0
-        setStatus("online")
-        if (subscribeRef.current && ws) {
-          ws.send(JSON.stringify(subscribeRef.current))
-        }
-      }
-
-      ws.onmessage = (evt) => {
-        try {
-          onMessageRef.current(JSON.parse(evt.data))
-        } catch {
-          /* ignore malformed frames */
-        }
-      }
-
-      ws.onerror = () => {
-        ws?.close()
-      }
-
-      ws.onclose = () => {
-        if (closedByUnmount) return
-        setStatus("offline")
-        scheduleReconnect()
-      }
-    }
-
-    const scheduleReconnect = () => {
-      if (closedByUnmount) return
-      // exponential backoff capped at 10s
-      const delay = Math.min(1000 * 2 ** retry, 10_000)
-      retry += 1
-      reconnectTimer = setTimeout(connect, delay)
-    }
-
-    connect()
-
-    return () => {
-      closedByUnmount = true
-      if (reconnectTimer) clearTimeout(reconnectTimer)
-      ws?.close()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url])
-
-  return status
-}
 
 /* -------------------------------------------------------------------------- */
 /*  CHAMFER / CLIP-PATH STYLE (chamfered corners, no border-radius)           */
@@ -226,7 +133,7 @@ function SlotChar({ char }: { char: string }) {
 }
 
 function SlotPrice({ value, symbol, color }: { value: number; symbol: string; color: string }) {
-  const text = fmtUSD(value, priceDecimals(symbol), priceDecimals(symbol))
+  const text = fmtUSD(value, priceDecimalsFor(symbol), priceDecimalsFor(symbol))
   return (
     <span className="flex tabular-nums font-mono" style={{ color }}>
       {text.split("").map((c, i) => (
@@ -397,7 +304,7 @@ function StatusLed({ status, label }: { status: "connecting" | "online" | "offli
 export default function CryptoTerminal() {
   const [tickers, setTickers] = useState<Record<string, TickerState>>(() =>
     Object.fromEntries(
-      TRACKED.map((t) => [
+      TERMINAL_PAIRS.map((t) => [
         t.symbol,
         { symbol: t.symbol, label: t.label, price: 0, prevPrice: 0, changePct: 0, direction: "flat" as Direction },
       ]),
@@ -436,7 +343,7 @@ export default function CryptoTerminal() {
   }, [])
 
   /* ---- Combined Binance SPOT stream: live prices (@ticker) + whale trades (@aggTrade) ---- */
-  const bySymbol = useMemo(() => new Map(TRACKED.map((t) => [t.symbol, t])), [])
+  const bySymbol = useMemo(() => new Map(TERMINAL_PAIRS.map((t) => [t.symbol, t])), [])
 
   const handleBinance = useCallback(
     (msg: unknown) => {
@@ -485,7 +392,7 @@ export default function CryptoTerminal() {
   )
 
   const binanceStreamUrl = useMemo(() => {
-    const streams = TRACKED.flatMap((t) => [`${t.symbol.toLowerCase()}@ticker`, `${t.symbol.toLowerCase()}@aggTrade`]).join(
+    const streams = TERMINAL_PAIRS.flatMap((t) => [`${t.symbol.toLowerCase()}@ticker`, `${t.symbol.toLowerCase()}@aggTrade`]).join(
       "/",
     )
     return `wss://data-stream.binance.vision/stream?streams=${streams}`
@@ -495,7 +402,7 @@ export default function CryptoTerminal() {
   /* ---- OKX public liquidation-orders feed (SWAP) ---- */
   const baseByFamily = useMemo(() => {
     const map = new Map<string, { label: string; symbol: string }>()
-    for (const t of TRACKED) {
+    for (const t of TERMINAL_PAIRS) {
       if (t.base === "PAXG") continue // no gold perpetual on OKX to match against
       map.set(`${t.base}-USDT`, { label: t.label, symbol: t.symbol })
     }
@@ -547,7 +454,7 @@ export default function CryptoTerminal() {
     subscribe: okxSub,
   })
 
-  const orderedTickers = TRACKED.map((t) => tickers[t.symbol])
+  const orderedTickers = TERMINAL_PAIRS.map((t) => tickers[t.symbol])
 
   return (
     <div
@@ -631,6 +538,11 @@ export default function CryptoTerminal() {
                 </AnimatePresence>
               )}
             </div>
+          </div>
+
+          {/* ---------------- 3. ORDER BOOK ---------------- */}
+          <div className="border-b" style={{ borderColor: COLOR.iron }}>
+            <OrderBookPanel />
           </div>
 
           {/* ---------------- FOOTER ---------------- */}
