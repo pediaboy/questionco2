@@ -9,6 +9,7 @@ const MENU = [
   { label: "Gratis", href: "/gratis" },
   { label: "Analisa", href: "/analisa" },
   { label: "Blog", href: "/blog" },
+  { label: "Papan Peringkat", href: "/papan-peringkat" },
   { label: "FAQ", href: "/faq" },
   { label: "Kontak", href: "/kontak" },
 ];
