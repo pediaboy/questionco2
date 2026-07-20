@@ -8,7 +8,7 @@ import { SIGNAL_PAIRS } from "@/lib/signalPairs";
 export const dynamic = "force-dynamic";
 
 async function buildChartFor(dataInstId: string) {
-  const m1Raw = await fetchOkxCandles(dataInstId, "1m", 100).catch(() => []);
+  const m1Raw = await fetchOkxCandles(dataInstId, "1m", 300).catch(() => []);
   // Resample confirmed 1m -> 15m for a compact real chart (avoids a second OKX bar-size call)
   const m15: { o: number; h: number; l: number; c: number }[] = [];
   for (let i = 0; i + 15 <= m1Raw.length; i += 15) {
