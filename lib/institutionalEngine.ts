@@ -320,21 +320,21 @@ const RSI_BUY_MAX = 75;
 const RSI_SELL_MIN = 25;
 const RSI_SELL_MAX = 45;
 const ADX_MIN = 25;
-// Re-tuned 2026-07-20 (round 2) after adding the owner's EA-style hard gates
-// (EMA9/21 momentum + EMA200 filter, anti-sideways min-distance, Donchian(50)+2pip
-// SnR breakout confirmation — see constants below). These 3 hard gates are much
-// stricter/burstier than the old 2-gate design (breakout-style logic only fires in
-// clusters right as a trend opens, then goes quiet while the channel re-adapts,
-// unlike the old pure trend+structure gate). Re-ran the same live 5-day OKX
-// backtest methodology across all 4 pairs with the new gates active: 76% collapsed
-// to ~1.2 signals/day (over-filtered — confidence and hard-gates were both
-// squeezing the same rare events). Swept down: 70%=4.4/day but 2 of 5 sampled days
-// had ZERO qualifying breakouts; 66% averaged 6.0/day AND was the lowest threshold
-// where every single day in the 5-day sample had at least 1 fire (range 1-13/day —
-// bursty by breakout-strategy nature, not a smooth constant rate). Chosen as the
-// best fit for "minimal 4-5, maksimal 10 sinyal per hari": hits the average, and
-// unlike higher thresholds doesn't risk multi-day silent stretches.
-const CONFIDENCE_MIN = 66;
+// Re-tuned 2026-07-20 (round 3) after two upstream changes: (1) added the owner's
+// EA-style hard gates (EMA9/21 momentum + EMA200 filter, anti-sideways min-distance,
+// Donchian(50)+2pip SnR breakout), (2) widened the SnR breakout check from "only the
+// single freshest candle" to a 3-candle recent-breakout window, after a live manual
+// cron trigger showed all 4 pairs correctly NO-TRADE'd mid-range with zero breakouts
+// on the single-candle version, and the owner reported zero signals firing at all.
+// Re-ran the live OKX backtest (fresh 5-day dataset) across all 4 pairs with both
+// changes active: 76%/66% (prior tunings) both now over/under-shot after the SnR
+// widening changed the base rate. Swept 55-75%: 68% landed the best combination —
+// 5.61 signals/day average (inside the owner's explicit "minimal 4-5, maksimal 10"
+// target) AND was the highest threshold where every single day in the 5-day sample
+// still had at least 1 fire (55-66% cross 7-10+/day, exceeding the max on busy days;
+// 70%+ started producing fully-silent days again). Bursty by breakout-strategy
+// nature (day range 1-13 in the sample) — not a smooth constant rate, expected.
+const CONFIDENCE_MIN = 68;
 
 // ---------- owner-spec EA-style momentum/SnR parameters (2026-07-20) ----------
 // Pasted directly from the owner's MT4/5-style EA config. "Points" convention in
@@ -428,13 +428,46 @@ export function evaluateInstitutional(
   // Dynamic SnR (Donchian channel, 50-candle lookback) breakout confirmation —
   // requires a genuine confirmed break past the channel edge by more than the
   // buffer (owner spec: SnR_Buffer_Points = 20 -> 2 pips) to filter false breakouts.
-  const snr = donchianChannel(m5, SNR_LOOKBACK_PERIOD);
+  // RECENT-breakout window (last 3 closed candles, not just the single freshest
+  // tick): a live 5-min cron checking only the exact current candle for "is price
+  // beyond the edge RIGHT NOW" misses the breakout entirely once price pulls back
+  // even slightly inside the buffer a candle or two later — starving the engine of
+  // valid setups that already happened and are still playing out. Matches this
+  // project's existing precedent of widening single-candle-only conditions to a
+  // short lookback (see the earlier EMA9/21 crossover tuning).
   const snrBuffer = SNR_BUFFER_PIPS * pipUnit;
-  const snrBreakoutOk = direction === "BUY" ? price > snr.upper + snrBuffer : price < snr.lower - snrBuffer;
+  const snrLookbackCandles = 3;
+  let snrBreakoutOk = false;
+  let snrUpperRef = 0;
+  let snrLowerRef = 0;
+  for (let k = 0; k < snrLookbackCandles; k++) {
+    const idx = m5.length - 1 - k;
+    if (idx < SNR_LOOKBACK_PERIOD) break;
+    const channel = donchianChannel(m5.slice(0, idx + 1), SNR_LOOKBACK_PERIOD);
+    const candleClose = m5[idx].close;
+    const brokeUp = candleClose > channel.upper + snrBuffer;
+    const brokeDown = candleClose < channel.lower - snrBuffer;
+    if (direction === "BUY" && brokeUp) {
+      snrBreakoutOk = true;
+      snrUpperRef = channel.upper;
+      snrLowerRef = channel.lower;
+      break;
+    }
+    if (direction === "SELL" && brokeDown) {
+      snrBreakoutOk = true;
+      snrUpperRef = channel.upper;
+      snrLowerRef = channel.lower;
+      break;
+    }
+    if (k === 0) {
+      snrUpperRef = channel.upper;
+      snrLowerRef = channel.lower;
+    }
+  }
   if (!snrBreakoutOk) {
     return empty(
-      `Belum breakout SnR Donchian(${SNR_LOOKBACK_PERIOD}) dengan buffer ${snrBuffer.toFixed(4)} ` +
-        `(upper ${snr.upper.toFixed(4)} / lower ${snr.lower.toFixed(4)}, price ${price.toFixed(4)}) — NO TRADE`
+      `Belum ada breakout SnR Donchian(${SNR_LOOKBACK_PERIOD}) dalam ${snrLookbackCandles} candle terakhir dengan buffer ${snrBuffer.toFixed(4)} ` +
+        `(upper ${snrUpperRef.toFixed(4)} / lower ${snrLowerRef.toFixed(4)}, price ${price.toFixed(4)}) — NO TRADE`
     );
   }
 
