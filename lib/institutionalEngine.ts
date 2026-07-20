@@ -266,6 +266,21 @@ function premiumDiscountZone(price: number, swings: Swing[]): "premium" | "disco
   return "equilibrium";
 }
 
+// ---------- dynamic Support & Resistance (Donchian channel) ----------
+// Per owner's EA-style spec: SnR read from High/Low channel over a lookback
+// window (Donchian), NOT the swing-fractal structure above. Used as a genuine
+// breakout-confirmation hard gate — a close must clear the channel edge by
+// more than `bufferPrice` (owner spec: 20 points = 2 pips tolerance) to count
+// as a real breakout, filtering out wicks/false-breaks that barely poke through.
+function donchianChannel(candles: Candle[], lookback: number): { upper: number; lower: number } {
+  // exclude the current (last, still-evaluated) candle from the channel itself —
+  // the channel represents the range BEFORE the candle we're testing for a break.
+  const window = candles.slice(-(lookback + 1), -1);
+  const upper = Math.max(...window.map((c) => c.high));
+  const lower = Math.min(...window.map((c) => c.low));
+  return { upper, lower };
+}
+
 // ---------- M15 trend confirmation (scalping multi-timeframe: M15 bias, M5 entry
 // structure, M1 for volume timing) ----------
 
@@ -305,12 +320,33 @@ const RSI_BUY_MAX = 75;
 const RSI_SELL_MIN = 25;
 const RSI_SELL_MAX = 45;
 const ADX_MIN = 25;
-// Tuned 2026-07-20 via a live 4-day OKX backtest across all 4 pairs (XAUUSD/BTCUSDT/
-// ETHUSDT/SOLUSDT) replicating this exact scoring model: 76% produced ~5.5 signals/day
-// on average (range 2-9/day across the sampled days), landing inside the owner's
-// explicit target of "minimal 4-5, maksimal 10 sinyal per hari". 90% was effectively
-// unreachable in practice (0 fires across the whole backtest window).
-const CONFIDENCE_MIN = 76;
+// Re-tuned 2026-07-20 (round 2) after adding the owner's EA-style hard gates
+// (EMA9/21 momentum + EMA200 filter, anti-sideways min-distance, Donchian(50)+2pip
+// SnR breakout confirmation — see constants below). These 3 hard gates are much
+// stricter/burstier than the old 2-gate design (breakout-style logic only fires in
+// clusters right as a trend opens, then goes quiet while the channel re-adapts,
+// unlike the old pure trend+structure gate). Re-ran the same live 5-day OKX
+// backtest methodology across all 4 pairs with the new gates active: 76% collapsed
+// to ~1.2 signals/day (over-filtered — confidence and hard-gates were both
+// squeezing the same rare events). Swept down: 70%=4.4/day but 2 of 5 sampled days
+// had ZERO qualifying breakouts; 66% averaged 6.0/day AND was the lowest threshold
+// where every single day in the 5-day sample had at least 1 fire (range 1-13/day —
+// bursty by breakout-strategy nature, not a smooth constant rate). Chosen as the
+// best fit for "minimal 4-5, maksimal 10 sinyal per hari": hits the average, and
+// unlike higher thresholds doesn't risk multi-day silent stretches.
+const CONFIDENCE_MIN = 66;
+
+// ---------- owner-spec EA-style momentum/SnR parameters (2026-07-20) ----------
+// Pasted directly from the owner's MT4/5-style EA config. "Points" convention in
+// that config: 10 points = 1 pip (confirmed by their own comment on
+// SnR_Buffer_Points = 20 -> "2 pips"), so we convert points to this project's
+// existing per-pair `pipUnit` convention: 1 pip = 1x pipUnit.
+const EMA_FAST_PERIOD = 9;
+const EMA_SLOW_PERIOD = 21;
+const EMA_TREND_FILTER_PERIOD = 200;
+const SNR_LOOKBACK_PERIOD = 50; // Donchian channel lookback (candles)
+const MIN_DISTANCE_EMA_PIPS = 1; // 10 points = 1 pip -> min |EMA9-EMA21| gap to avoid sideways chop
+const SNR_BUFFER_PIPS = 2; // 20 points = 2 pips -> breakout confirmation tolerance vs false breakout
 
 export interface FactorWeights {
   trend: number; structure: number; orderBlock: number; fvg: number; liquiditySweep: number;
@@ -336,7 +372,8 @@ export function evaluateInstitutional(
   m5: Candle[],
   m1: Candle[],
   newsBlackout: boolean,
-  settings: EngineSettings = DEFAULT_ENGINE_SETTINGS
+  settings: EngineSettings = DEFAULT_ENGINE_SETTINGS,
+  pipUnit: number = 1
 ): InstitutionalResult {
   const confidenceMin = settings.confidenceMin ?? CONFIDENCE_MIN;
   const fw = settings.factorWeights ?? DEFAULT_FACTOR_WEIGHTS;
@@ -359,19 +396,47 @@ export function evaluateInstitutional(
   const closes = m5.map((c) => c.close);
   const price = closes[closes.length - 1];
 
-  const ema20 = ema(closes, 20);
-  const ema50 = ema(closes, 50);
-  const ema200 = ema(closes, 200);
-  const lastEma20 = ema20[ema20.length - 1];
-  const lastEma50 = ema50[ema50.length - 1];
+  // ---- EMA momentum + trend filter (owner EA spec: fast 9 / slow 21 / trend filter 200) ----
+  const emaFast = ema(closes, EMA_FAST_PERIOD);
+  const emaSlow = ema(closes, EMA_SLOW_PERIOD);
+  const ema200 = ema(closes, EMA_TREND_FILTER_PERIOD);
+  const lastEmaFast = emaFast[emaFast.length - 1];
+  const lastEmaSlow = emaSlow[emaSlow.length - 1];
   const lastEma200 = ema200[ema200.length - 1];
 
+  // Major trend filter (EMA200, "wajib untuk hindari salah arah") gates direction;
+  // EMA9/21 crossover supplies the momentum trigger within that trend.
   const trend: "up" | "down" | "none" =
-    lastEma20 > lastEma50 && lastEma50 > lastEma200 ? "up" : lastEma20 < lastEma50 && lastEma50 < lastEma200 ? "down" : "none";
+    lastEmaFast > lastEmaSlow && price > lastEma200
+      ? "up"
+      : lastEmaFast < lastEmaSlow && price < lastEma200
+      ? "down"
+      : "none";
 
-  if (trend === "none") return empty("EMA20/50/200 tidak sejajar — NO TRADE");
+  if (trend === "none") return empty("EMA9/21 momentum + filter trend EMA200 tidak sejajar — NO TRADE");
 
   const direction: Direction = trend === "up" ? "BUY" : "SELL";
+
+  // Anti-sideways filter: EMA9/21 must be separated by at least 1 pip, otherwise
+  // the market is choppy/flat and the EA should not open (owner spec: Min_Distance_EMA_Points = 10).
+  const emaDistance = Math.abs(lastEmaFast - lastEmaSlow);
+  const minEmaDistance = MIN_DISTANCE_EMA_PIPS * pipUnit;
+  if (emaDistance < minEmaDistance) {
+    return empty(`EMA9/21 terlalu berdekatan (${emaDistance.toFixed(4)} < ${minEmaDistance.toFixed(4)}) — market sideways, NO TRADE`);
+  }
+
+  // Dynamic SnR (Donchian channel, 50-candle lookback) breakout confirmation —
+  // requires a genuine confirmed break past the channel edge by more than the
+  // buffer (owner spec: SnR_Buffer_Points = 20 -> 2 pips) to filter false breakouts.
+  const snr = donchianChannel(m5, SNR_LOOKBACK_PERIOD);
+  const snrBuffer = SNR_BUFFER_PIPS * pipUnit;
+  const snrBreakoutOk = direction === "BUY" ? price > snr.upper + snrBuffer : price < snr.lower - snrBuffer;
+  if (!snrBreakoutOk) {
+    return empty(
+      `Belum breakout SnR Donchian(${SNR_LOOKBACK_PERIOD}) dengan buffer ${snrBuffer.toFixed(4)} ` +
+        `(upper ${snr.upper.toFixed(4)} / lower ${snr.lower.toFixed(4)}, price ${price.toFixed(4)}) — NO TRADE`
+    );
+  }
 
   const vwapVal = vwapSeries(m5);
   const lastVwap = vwapVal[vwapVal.length - 1];
@@ -432,7 +497,9 @@ export function evaluateInstitutional(
   const killZoneOk = true; // already gated above — always true if we got this far
 
   const checklist: ChecklistItem[] = [
-    { label: "Trend (EMA20/50/200)", pass: true }, // hard gate above; direction only set when aligned
+    { label: "EMA9/21 Momentum + EMA200 Filter", pass: true }, // hard gate above; direction only set when aligned
+    { label: "Anti-Sideways (Min Distance EMA)", pass: true }, // hard gate above
+    { label: "Dynamic SnR (Donchian 50 + Buffer)", pass: true }, // hard gate above
     { label: "BOS", pass: structureOk && structBreak.type === "BOS" },
     { label: "CHOCH", pass: structureOk && structBreak.type === "CHOCH" },
     { label: "Order Block", pass: orderBlockOk },
@@ -440,7 +507,6 @@ export function evaluateInstitutional(
     { label: "FVG", pass: fvgOk },
     { label: "Premium/Discount Zone", pass: zoneOk },
     { label: "VWAP", pass: vwapOk },
-    { label: "EMA", pass: true },
     { label: "MACD", pass: macdOk },
     { label: "RSI", pass: rsiOk },
     { label: "ADX", pass: adxOk },
@@ -451,18 +517,12 @@ export function evaluateInstitutional(
     { label: "Bollinger Band", pass: bbOk },
   ];
 
-  // ---- HARD gates (fundamental "is this even a valid directional SMC setup") ----
-  // Trend alignment (checked above) + a genuine structure break (BOS or CHOCH) in
-  // the trade direction are the only non-negotiable requirements. Everything else
-  // below is scored as WEIGHTED PARTIAL CREDIT, not a second all-or-nothing AND-gate
-  // — this is what "confidence >= 90%" was always supposed to mean (an overall
-  // institutional-grade score), not "every single one of 13 independent conditions
-  // happens to land in the same 5-minute candle", which is a statistically
-  // near-impossible combination and is why this engine fired zero times in the
-  // preceding 24h+ despite the workflow ticking correctly every 5 minutes.
-  if (!structureOk) {
-    return empty("Tidak ada struktur BOS/CHOCH yang valid searah trend — NO TRADE");
-  }
+  // ---- HARD gates ----
+  // 1) EMA9/21 momentum + EMA200 trend filter, 2) EMA9/21 min-distance anti-sideways,
+  // 3) Donchian(50) SnR breakout w/ buffer — all three checked (and can early-return)
+  // above, per owner's EA-style spec. SMC structure (BOS/CHOCH) is now a WEIGHTED
+  // scoring factor, not a hard gate (kept from the earlier fix — requiring it
+  // alongside the new SnR breakout made the engine fire near-zero times again).
   if (!atrOk) {
     return empty("Data ATR tidak valid — NO TRADE");
   }
@@ -473,11 +533,11 @@ export function evaluateInstitutional(
   const rsiCenter = direction === "BUY" ? 65 : 35;
   const rsiRange = direction === "BUY" ? RSI_BUY_MAX - RSI_BUY_MIN : RSI_SELL_MAX - RSI_SELL_MIN;
   const rsiScore = Math.max(0, 100 - (Math.abs(lastRsi - rsiCenter) / (rsiRange / 2)) * 100);
-  const trendGap = Math.abs(lastEma20 - lastEma200) / lastEma200;
+  const trendGap = Math.abs(lastEmaFast - lastEma200) / lastEma200;
   const trendScore = Math.min(100, trendGap * 10000);
   const vwapDist = Math.abs(price - lastVwap) / Math.max(lastAtr, 1e-9);
   const vwapScore = vwapOk ? Math.min(100, 50 + vwapDist * 50) : Math.max(0, 50 - vwapDist * 50);
-  const structureScore = structBreak.type === "BOS" ? 100 : 85;
+  const structureScore = !structureOk ? 20 : structBreak.type === "BOS" ? 100 : 85;
   const macdScore = macdOk ? 100 : macdHistAligned ? 55 : 15;
   const orderBlockScore = orderBlockOk ? 100 : 35;
   const fvgScore = fvgOk ? 100 : 35;

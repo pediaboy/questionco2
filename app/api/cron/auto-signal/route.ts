@@ -290,7 +290,7 @@ async function processPair(
     fetchOkxCandles(pair.dataInstId, "1m", 100),
   ]);
 
-  const result = evaluateInstitutional(m5, m1, newsBlackout, engineSettings);
+  const result = evaluateInstitutional(m5, m1, newsBlackout, engineSettings, pair.pipUnit);
   if (!result.direction) {
     return {
       pair: pair.key,

@@ -44,13 +44,13 @@ async function evalPairLive(pair: (typeof SIGNAL_PAIRS)[number], settings: Engin
     fetchOkxCandles(pair.dataInstId, "1m", 100),
   ]);
   const price = await fetchOkxLastPrice(pair.dataInstId).catch(() => m5[m5.length - 1]?.close ?? 0);
-  const result = evaluateInstitutional(m5, m1, false, settings);
+  const result = evaluateInstitutional(m5, m1, false, settings, pair.pipUnit);
 
   let stage: PairLiveStatus["stage"] = "structure";
   if (result.direction && result.confidence > 0) stage = result.confidence >= settings.confidenceMin ? "ready" : "scoring_low";
 
   const weakFactors = (result.checklist || [])
-    .filter((c) => !c.pass && c.label !== "BOS" && c.label !== "CHOCH" && c.label !== "Trend (EMA20/50/200)" && c.label !== "EMA" && c.label !== "Kill Zone")
+    .filter((c) => !c.pass && c.label !== "BOS" && c.label !== "CHOCH" && c.label !== "EMA9/21 Momentum + EMA200 Filter" && c.label !== "Anti-Sideways (Min Distance EMA)" && c.label !== "Dynamic SnR (Donchian 50 + Buffer)" && c.label !== "Kill Zone")
     .map((c) => c.label);
 
   return {
