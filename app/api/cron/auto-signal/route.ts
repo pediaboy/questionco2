@@ -6,8 +6,7 @@ import { evaluateXauAggressive } from "@/lib/xauAggressiveEngine";
 import { isNewsBlackout } from "@/lib/newsFilter";
 import { getActiveSessions } from "@/lib/marketSessions";
 import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
-import { sendTelegramMessage } from "@/lib/telegram";
-import { sendToChannel } from "@/lib/telegramApi";
+import { sendToChannel, InlineKeyboard } from "@/lib/telegramApi";
 import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
 
 // Any signal (auto OR manual) is monitored the same way -- alerts always go to the
@@ -455,7 +454,14 @@ async function processPair(
   if (error) return { pair: pair.key, action: "error", error: error.message };
 
   const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, "none", result.confidence, result.reasoning, []);
-  await sendTelegramMessage(message);
+  const statusKeyboard: InlineKeyboard = [
+    [
+      { text: "\ud83c\udfaf TARGET", callback_data: `sigstat:target:${created.id}` },
+      { text: "\u2696\ufe0f BE", callback_data: `sigstat:be:${created.id}` },
+      { text: "\ud83d\udcca LIVE", callback_data: `sigstat:live:${created.id}` },
+    ],
+  ];
+  await sendToChannel(vipChannelId(), message, statusKeyboard);
   await fanOutAlerts(admin, created.id, pair.label, result.direction, result.confidence, message.replace(/<[^>]+>/g, "")).catch(() => null);
 
   return {

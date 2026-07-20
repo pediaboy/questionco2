@@ -51,10 +51,10 @@ export async function deleteMessage(chatId: number | string, messageId: number) 
   return call("deleteMessage", { chat_id: chatId, message_id: messageId });
 }
 
-export async function answerCallbackQuery(callbackQueryId: string, text?: string) {
+export async function answerCallbackQuery(callbackQueryId: string, text?: string, showAlert = false) {
   return call("answerCallbackQuery", {
     callback_query_id: callbackQueryId,
-    ...(text ? { text, show_alert: false } : {}),
+    ...(text ? { text, show_alert: showAlert } : {}),
   });
 }
 
@@ -63,13 +63,18 @@ export async function setWebhook(url: string) {
 }
 
 /** Send a plain outbound message to any channel/chat id (used for VIP/public signal routing + greetings). */
-export async function sendToChannel(chatId: string | number, text: string): Promise<{ ok: boolean; error?: string }> {
+export async function sendToChannel(
+  chatId: string | number,
+  text: string,
+  keyboard?: InlineKeyboard
+): Promise<{ ok: boolean; error?: string }> {
   try {
     const json = await call("sendMessage", {
       chat_id: chatId,
       text,
       parse_mode: "HTML",
       disable_web_page_preview: true,
+      ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {}),
     });
     if (!json.ok) return { ok: false, error: json.description || "Telegram API error" };
     return { ok: true };

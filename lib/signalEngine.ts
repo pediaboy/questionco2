@@ -57,6 +57,25 @@ export async function fetchOkxLastPrice(instId: string): Promise<number> {
   return Number(json.data[0].last);
 }
 
+// Realtime price for a pair, matching the same anchor logic the cron uses when it
+// creates/monitors signals: XAUUSD is priced off the site's own TradingView-scanner
+// ticker (so numbers match what members see everywhere else on the site), all other
+// pairs use their direct OKX last price. Used by the Telegram "Live Status" inline
+// buttons so a button-press always reflects the true current price, never a cache.
+export async function getLivePriceForPair(pairKey: string, dataInstId: string): Promise<number> {
+  if (pairKey === "XAUUSD") {
+    const res = await fetch("https://scanner.tradingview.com/cfd/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbols: { tickers: ["OANDA:XAUUSD"] }, columns: ["close"] }),
+      cache: "no-store",
+    });
+    const json = await res.json();
+    return Number(json?.data?.[0]?.d?.[0]);
+  }
+  return fetchOkxLastPrice(dataInstId);
+}
+
 // ---- Indicator math ----
 
 export function ema(values: number[], period: number): number[] {

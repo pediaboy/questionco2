@@ -10,6 +10,7 @@ import {
 } from "@/lib/telegramApi";
 import { TELEGRAM_ADMIN_ID, vipChannelId, publicChannelId, SIGNAL_PAIR_OPTIONS } from "@/lib/telegramBotConfig";
 import { SIGNAL_PAIRS } from "@/lib/signalPairs";
+import { getLivePriceForPair } from "@/lib/signalEngine";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,105 @@ function fmtDate(iso: string | null): string {
 
 const BACK_BTN = { text: "🔙 Menu Utama", callback_data: "menu:main" };
 const CANCEL_BTN = { text: "❌ Batal", callback_data: "cancel" };
+
+// ---------- public "Live Status" inline buttons (attached to every outbound signal,
+// auto AND manual) -- unlike the rest of this bot, these are NOT admin-gated: any
+// channel subscriber can tap them and gets a private popup (answerCallbackQuery
+// show_alert) computed from the live price at the exact moment of the tap, never
+// a cache. Kept intentionally short (Telegram's alert popup is capped at 200 chars),
+// split into 3 focused buttons instead of one wall of text. ----------
+
+function signalStatusKeyboard(signalId: string): InlineKeyboard {
+  return [
+    [
+      { text: "🎯 TARGET", callback_data: `sigstat:target:${signalId}` },
+      { text: "⚖️ BE", callback_data: `sigstat:be:${signalId}` },
+      { text: "📊 LIVE", callback_data: `sigstat:live:${signalId}` },
+    ],
+  ];
+}
+
+function fmtPrice(n: number, decimals: number) {
+  return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+async function buildSigStatusText(admin: ReturnType<typeof getSupabaseAdmin>, kind: string, signalId: string): Promise<string> {
+  const { data: sig } = await admin.from("qco2_signals").select("*").eq("id", signalId).maybeSingle();
+  if (!sig) return "Sinyal tidak ditemukan (mungkin sudah lama/terhapus).";
+
+  const cfg = SIGNAL_PAIRS.find((p) => p.label === sig.pair);
+  const pipUnit: number = sig.pip_unit || cfg?.pipUnit || 1;
+  const decimals = pipUnit < 1 ? 2 : 0;
+  const dir: string = sig.direction;
+
+  // Closed signals: no more live tracking, just report the final outcome.
+  if (sig.status !== "active") {
+    const outcomeLabel: Record<string, string> = {
+      tp_hit: `TP TERCAPAI (${(sig.hit_level || "").toUpperCase()})`,
+      sl_hit: "SL TERKENA",
+      timeout: "TIMEOUT (belum kena target)",
+      closed: "DITUTUP",
+    };
+    return `${sig.pair} ${dir} — Sinyal sudah SELESAI.
+Hasil: ${outcomeLabel[sig.status] || sig.status}
+Entry: ${fmtPrice(sig.entry, decimals)}`;
+  }
+
+  let livePrice: number;
+  try {
+    livePrice = await getLivePriceForPair(sig.pair, cfg?.dataInstId || "");
+  } catch {
+    return "Gagal ambil harga live saat ini, coba lagi sebentar lagi.";
+  }
+
+  const pipsRunning = Math.round(
+    dir === "BUY" ? (livePrice - sig.entry) / pipUnit : (sig.entry - livePrice) / pipUnit
+  );
+
+  if (kind === "live") {
+    return (
+      `${sig.pair} ${dir} — LIVE
+` +
+      `Harga skrg: ${fmtPrice(livePrice, decimals)}
+` +
+      `Entry: ${fmtPrice(sig.entry, decimals)}
+` +
+      `Running: ${pipsRunning >= 0 ? "+" : ""}${pipsRunning} pips`
+    );
+  }
+
+  if (kind === "target") {
+    const tps: number[] = [sig.take_profit, sig.tp2, sig.tp3, sig.tp4].filter((v) => v !== null && v !== undefined);
+    let nextIdx = -1;
+    const tpLines = tps
+      .map((tp, i) => {
+        const tpPips = Math.round(Math.abs(tp - sig.entry) / pipUnit);
+        const reached = dir === "BUY" ? livePrice >= tp : livePrice <= tp;
+        if (!reached && nextIdx === -1) nextIdx = i;
+        return `TP${i + 1} ${tpPips}${reached ? "✓" : ""}`;
+      })
+      .join(" ");
+    const slPips = Math.round(Math.abs(sig.stop_loss - sig.entry) / pipUnit);
+    const toNext =
+      nextIdx >= 0 ? Math.round(Math.abs(tps[nextIdx] - livePrice) / pipUnit) : 0;
+    const nextLine = nextIdx >= 0 ? `\nMenuju TP${nextIdx + 1}: butuh +${toNext} pips lagi` : "\nSemua TP tercapai";
+    return `${sig.pair} ${dir} | Live ${fmtPrice(livePrice, decimals)}\n${tpLines}\nSL ${slPips} pips${nextLine}`;
+  }
+
+  // kind === "be"
+  const BE_THRESHOLDS = [20, 50, 70];
+  const level: number = sig.be_alert_level || 0;
+  const nextThreshold = BE_THRESHOLDS.find((t) => t > level);
+  return (
+    `${sig.pair} ${dir} — Status BE
+` +
+    `Running: ${pipsRunning >= 0 ? "+" : ""}${pipsRunning} pips
+` +
+    `Level BE tercapai: ${level > 0 ? level + " pips (AKTIF)" : "belum"}
+` +
+    `${nextThreshold ? "Next level: " + nextThreshold + " pips" : "Sudah level maksimal"}`
+  );
+}
 
 // ---------- main menu ----------
 
@@ -311,6 +411,15 @@ export async function POST(req: NextRequest) {
     const messageId = cq.message?.message_id;
     const data: string = cq.data || "";
 
+    // Public "Live Status" buttons -- open to ANY subscriber who taps them, not just
+    // the admin. Must be handled before the admin-only gate below.
+    if (data.startsWith("sigstat:")) {
+      const [, kind, signalId] = data.split(":");
+      const text = await buildSigStatusText(admin, kind, signalId);
+      await answerCallbackQuery(cq.id, text.slice(0, 200), true);
+      return NextResponse.json({ ok: true });
+    }
+
     if (fromId !== TELEGRAM_ADMIN_ID) {
       await answerCallbackQuery(cq.id, "Khusus admin.");
       return NextResponse.json({ ok: true });
@@ -504,13 +613,14 @@ export async function POST(req: NextRequest) {
       const cfg = SIGNAL_PAIRS.find((p) => p.key === d.pair);
       if (cfg) insertPayload.pip_unit = cfg.pipUnit;
 
-      const { error } = await admin.from("qco2_signals").insert(insertPayload);
+      const { data: createdSig, error } = await admin.from("qco2_signals").insert(insertPayload).select().single();
       if (error) {
         await editMessageText(chatId, messageId, `❌ Gagal simpan sinyal: ${error.message}`, [[BACK_BTN]]);
       } else {
         const msg = buildSignalMessage(d.pair, d.direction, d.entry, d.sl, tps);
-        await sendToChannel(vipChannelId(), msg);
-        if (d.audience === "public") await sendToChannel(publicChannelId(), msg);
+        const kb = signalStatusKeyboard(createdSig.id);
+        await sendToChannel(vipChannelId(), msg, kb);
+        if (d.audience === "public") await sendToChannel(publicChannelId(), msg, kb);
         await editMessageText(chatId, messageId, `✅ <b>Sinyal berhasil dikirim!</b>\n\nSudah tayang di web dan channel Telegram.`, [[BACK_BTN]]);
       }
       session.state = "idle";
