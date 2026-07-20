@@ -320,21 +320,25 @@ const RSI_BUY_MAX = 75;
 const RSI_SELL_MIN = 25;
 const RSI_SELL_MAX = 45;
 const ADX_MIN = 25;
-// Re-tuned 2026-07-20 (round 3) after two upstream changes: (1) added the owner's
-// EA-style hard gates (EMA9/21 momentum + EMA200 filter, anti-sideways min-distance,
-// Donchian(50)+2pip SnR breakout), (2) widened the SnR breakout check from "only the
-// single freshest candle" to a 3-candle recent-breakout window, after a live manual
-// cron trigger showed all 4 pairs correctly NO-TRADE'd mid-range with zero breakouts
-// on the single-candle version, and the owner reported zero signals firing at all.
-// Re-ran the live OKX backtest (fresh 5-day dataset) across all 4 pairs with both
-// changes active: 76%/66% (prior tunings) both now over/under-shot after the SnR
-// widening changed the base rate. Swept 55-75%: 68% landed the best combination —
-// 5.61 signals/day average (inside the owner's explicit "minimal 4-5, maksimal 10"
-// target) AND was the highest threshold where every single day in the 5-day sample
-// still had at least 1 fire (55-66% cross 7-10+/day, exceeding the max on busy days;
-// 70%+ started producing fully-silent days again). Bursty by breakout-strategy
-// nature (day range 1-13 in the sample) — not a smooth constant rate, expected.
-const CONFIDENCE_MIN = 68;
+// Re-tuned 2026-07-20 (round 5) after the owner clarified this must be real
+// M1/M5 HIGH-RISK SCALPING — frequent, fast entries, not a slow selective system.
+// Two changes drove this retune: (1) SnR Donchian breakout was demoted from a hard
+// gate to a pure scoring factor (round 4, see FactorWeights.snr) — the only hard
+// gates left are the fast EMA9/21 momentum + EMA200 trend filter and the
+// anti-sideways min-distance check, both of which can flip within a few M5 candles;
+// (2) discovered and fixed a real bug where the qco2_engine_settings DB row
+// (created during an earlier settings-driven refactor) was silently overriding
+// every code-level CONFIDENCE_MIN change with a stale confidence_min=76 value —
+// meaning rounds 2-4's tuning never actually took effect live. With both fixed, a
+// fresh live 5-day OKX backtest across all 4 pairs (hard-gate-only frequency is now
+// ~750-830 passes/pair over 5 days — far more permissive than the old SnR-gated
+// design) showed 68% still only fires ~5.6/day, too conservative for the owner's
+// explicit high-risk-scalping ask. Swept 35-65%: chose 62% — ~14.6 signals/day
+// average (full-day range 12-23), a deliberately more aggressive frequency
+// matching "high risk scalping" tolerance while still requiring every non-hard-gate
+// factor (SnR, structure, RSI, MACD, ADX, volume, CVD, Bollinger, M15 confirmation)
+// to meaningfully contribute — not a free-for-all.
+const CONFIDENCE_MIN = 62;
 
 // ---------- owner-spec EA-style momentum/SnR parameters (2026-07-20) ----------
 // Pasted directly from the owner's MT4/5-style EA config. "Points" convention in
