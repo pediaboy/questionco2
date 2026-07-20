@@ -312,7 +312,34 @@ const ADX_MIN = 25;
 // unreachable in practice (0 fires across the whole backtest window).
 const CONFIDENCE_MIN = 76;
 
-export function evaluateInstitutional(m5: Candle[], m1: Candle[], newsBlackout: boolean): InstitutionalResult {
+export interface FactorWeights {
+  trend: number; structure: number; orderBlock: number; fvg: number; liquiditySweep: number;
+  zone: number; vwap: number; macd: number; rsi: number; adx: number; volume: number; cvd: number; bollinger: number;
+}
+
+export const DEFAULT_FACTOR_WEIGHTS: FactorWeights = {
+  trend: 0.1, structure: 0.12, orderBlock: 0.05, fvg: 0.05, liquiditySweep: 0.08, zone: 0.08,
+  vwap: 0.1, macd: 0.1, rsi: 0.12, adx: 0.1, volume: 0.05, cvd: 0.03, bollinger: 0.02,
+};
+
+export interface EngineSettings {
+  confidenceMin: number;
+  factorWeights: FactorWeights;
+}
+
+export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
+  confidenceMin: CONFIDENCE_MIN,
+  factorWeights: DEFAULT_FACTOR_WEIGHTS,
+};
+
+export function evaluateInstitutional(
+  m5: Candle[],
+  m1: Candle[],
+  newsBlackout: boolean,
+  settings: EngineSettings = DEFAULT_ENGINE_SETTINGS
+): InstitutionalResult {
+  const confidenceMin = settings.confidenceMin ?? CONFIDENCE_MIN;
+  const fw = settings.factorWeights ?? DEFAULT_FACTOR_WEIGHTS;
   const empty = (blockReason: string): InstitutionalResult => ({
     direction: null,
     confidence: 0,
@@ -460,19 +487,19 @@ export function evaluateInstitutional(m5: Candle[], m1: Candle[], newsBlackout: 
   const bbScore = bbOk ? 100 : 40;
 
   const weights: [number, number][] = [
-    [trendScore, 0.1],
-    [structureScore, 0.12],
-    [orderBlockScore, 0.05],
-    [fvgScore, 0.05],
-    [liquiditySweepScore, 0.08],
-    [zoneScore, 0.08],
-    [vwapScore, 0.1],
-    [macdScore, 0.1],
-    [rsiScore, 0.12],
-    [adxScore, 0.1],
-    [volScore, 0.05],
-    [cvdScore, 0.03],
-    [bbScore, 0.02],
+    [trendScore, fw.trend],
+    [structureScore, fw.structure],
+    [orderBlockScore, fw.orderBlock],
+    [fvgScore, fw.fvg],
+    [liquiditySweepScore, fw.liquiditySweep],
+    [zoneScore, fw.zone],
+    [vwapScore, fw.vwap],
+    [macdScore, fw.macd],
+    [rsiScore, fw.rsi],
+    [adxScore, fw.adx],
+    [volScore, fw.volume],
+    [cvdScore, fw.cvd],
+    [bbScore, fw.bollinger],
   ];
   const baseConfidence = Math.round(weights.reduce((sum, [score, w]) => sum + score * w, 0));
 
@@ -486,9 +513,9 @@ export function evaluateInstitutional(m5: Candle[], m1: Candle[], newsBlackout: 
   checklist.push({ label: "M15 Trend Confirmation", pass: m15Agree });
   const confidence = Math.max(0, Math.min(100, baseConfidence + m15Bonus));
 
-  if (confidence < CONFIDENCE_MIN) {
+  if (confidence < confidenceMin) {
     const weak = checklist.filter((c) => !c.pass && c.label !== "BOS" && c.label !== "CHOCH").map((c) => c.label);
-    return empty(`Confidence ${confidence}% dibawah minimal ${CONFIDENCE_MIN}% (lemah di: ${weak.join(", ") || "kombinasi minor"})`);
+    return { ...empty(`Confidence ${confidence}% dibawah minimal ${confidenceMin}% (lemah di: ${weak.join(", ") || "kombinasi minor"})`), confidence };
   }
 
   const reasoning =

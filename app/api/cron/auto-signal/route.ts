@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { fetchOkxCandles, fetchOkxLastPrice } from "@/lib/signalEngine";
-import { evaluateInstitutional } from "@/lib/institutionalEngine";
+import { evaluateInstitutional, EngineSettings, DEFAULT_ENGINE_SETTINGS, FactorWeights } from "@/lib/institutionalEngine";
 import { isNewsBlackout } from "@/lib/newsFilter";
 import { getActiveSessions } from "@/lib/marketSessions";
 import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
@@ -129,7 +129,70 @@ async function checkSessionChange(admin: ReturnType<typeof getSupabaseAdmin>) {
   return { changed: true, opened, closed, active };
 }
 
-async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabaseAdmin>, newsBlackout: boolean) {
+interface RiskSettings {
+  atrSlMultiplier: number;
+  rrTargets: number[];
+  activePairs: string[];
+}
+
+async function loadEngineSettings(admin: ReturnType<typeof getSupabaseAdmin>): Promise<{ engine: EngineSettings; risk: RiskSettings }> {
+  const { data } = await admin.from("qco2_engine_settings").select("*").eq("id", 1).maybeSingle();
+  if (!data) {
+    return { engine: DEFAULT_ENGINE_SETTINGS, risk: { atrSlMultiplier: ATR_SL_MULTIPLIER, rrTargets: RR_TARGETS, activePairs: SIGNAL_PAIRS.map((p) => p.key) } };
+  }
+  const fw = data.factor_weights as FactorWeights;
+  return {
+    engine: { confidenceMin: data.confidence_min ?? 76, factorWeights: fw ?? DEFAULT_ENGINE_SETTINGS.factorWeights },
+    risk: {
+      atrSlMultiplier: Number(data.atr_sl_multiplier) || ATR_SL_MULTIPLIER,
+      rrTargets: Array.isArray(data.rr_targets) ? data.rr_targets : RR_TARGETS,
+      activePairs: Array.isArray(data.active_pairs) ? data.active_pairs : SIGNAL_PAIRS.map((p) => p.key),
+    },
+  };
+}
+
+async function logTick(
+  admin: ReturnType<typeof getSupabaseAdmin>,
+  pairKey: string,
+  action: string,
+  confidence: number | null,
+  direction: string | null,
+  reasoning: string | null
+) {
+  await admin.from("qco2_engine_logs").insert({ pair: pairKey, action, confidence, direction, reasoning });
+}
+
+async function fanOutAlerts(
+  admin: ReturnType<typeof getSupabaseAdmin>,
+  signalId: string,
+  pairLabel: string,
+  direction: string,
+  confidence: number,
+  message: string
+) {
+  const { data: rules } = await admin.from("qco2_alert_rules").select("*").eq("enabled", true).lte("min_confidence", confidence);
+  if (!rules || rules.length === 0) return;
+  const matches = rules.filter((r) => r.pairs === "all" || (Array.isArray(r.pairs) && r.pairs.includes(pairLabel)));
+  if (matches.length === 0) return;
+  await admin.from("qco2_notifications").insert(
+    matches.map((r) => ({
+      user_id: r.user_id,
+      signal_id: signalId,
+      pair: pairLabel,
+      direction,
+      confidence,
+      message,
+    }))
+  );
+}
+
+async function processPair(
+  pair: PairConfig,
+  admin: ReturnType<typeof getSupabaseAdmin>,
+  newsBlackout: boolean,
+  engineSettings: EngineSettings,
+  riskSettings: RiskSettings
+) {
   const decimals = pair.pipUnit < 1 ? 2 : 0;
 
   if (pair.skipWeekends && isWeekendWIB()) {
@@ -227,7 +290,7 @@ async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabas
     fetchOkxCandles(pair.dataInstId, "1m", 100),
   ]);
 
-  const result = evaluateInstitutional(m5, m1, newsBlackout);
+  const result = evaluateInstitutional(m5, m1, newsBlackout, engineSettings);
   if (!result.direction) {
     return {
       pair: pair.key,
@@ -238,12 +301,12 @@ async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabas
   }
 
   const entry = livePrice;
-  const slDistance = result.atr * ATR_SL_MULTIPLIER;
+  const slDistance = result.atr * riskSettings.atrSlMultiplier;
   const sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;
   const tps =
     result.direction === "BUY"
-      ? RR_TARGETS.map((rr) => entry + slDistance * rr)
-      : RR_TARGETS.map((rr) => entry - slDistance * rr);
+      ? riskSettings.rrTargets.map((rr) => entry + slDistance * rr)
+      : riskSettings.rrTargets.map((rr) => entry - slDistance * rr);
 
   const { data: created, error } = await admin
     .from("qco2_signals")
@@ -270,9 +333,9 @@ async function processPair(pair: PairConfig, admin: ReturnType<typeof getSupabas
 
   if (error) return { pair: pair.key, action: "error", error: error.message };
 
-  await sendTelegramMessage(
-    buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, result.trend, result.confidence, result.reasoning, result.checklist)
-  );
+  const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, result.trend, result.confidence, result.reasoning, result.checklist);
+  await sendTelegramMessage(message);
+  await fanOutAlerts(admin, created.id, pair.label, result.direction, result.confidence, message.replace(/<[^>]+>/g, "")).catch(() => null);
 
   return { pair: pair.key, action: "created", id: created.id, direction: result.direction, entry, confidence: result.confidence };
 }
@@ -284,13 +347,24 @@ export async function POST(req: NextRequest) {
   }
 
   const admin = getSupabaseAdmin();
-  const [newsBlackout, sessionChange] = await Promise.all([isNewsBlackout(), checkSessionChange(admin)]);
+  const [newsBlackout, sessionChange, settings] = await Promise.all([
+    isNewsBlackout(),
+    checkSessionChange(admin),
+    loadEngineSettings(admin),
+  ]);
+
+  const activePairs = SIGNAL_PAIRS.filter((p) => settings.risk.activePairs.includes(p.key));
   const results = [];
-  for (const pair of SIGNAL_PAIRS) {
+  for (const pair of activePairs) {
     try {
-      results.push(await processPair(pair, admin, newsBlackout));
+      const r = await processPair(pair, admin, newsBlackout, settings.engine, settings.risk);
+      results.push(r);
+      const anyR = r as { confidence?: number; direction?: string | null; reason?: string; error?: string };
+      await logTick(admin, pair.key, r.action, anyR.confidence ?? null, anyR.direction ?? null, anyR.reason ?? anyR.error ?? null).catch(() => null);
     } catch (err) {
-      results.push({ pair: pair.key, action: "error", error: err instanceof Error ? err.message : "unknown" });
+      const msg = err instanceof Error ? err.message : "unknown";
+      results.push({ pair: pair.key, action: "error", error: msg });
+      await logTick(admin, pair.key, "error", null, null, msg).catch(() => null);
     }
   }
 
