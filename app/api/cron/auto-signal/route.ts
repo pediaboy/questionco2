@@ -381,7 +381,7 @@ async function processPair(
       fetchOkxCandles(pair.dataInstId, "3m", 60),
       fetchOkxCandles(pair.dataInstId, "5m", 60),
     ]);
-    result = evaluateXauAggressive(m1Aggr, m3Aggr, m5Aggr, newsBlackout, pair.pipUnit);
+    result = evaluateXauAggressive(m1Aggr, m3Aggr, m5Aggr, newsBlackout, pair.pipUnit, livePrice);
     strategyMode = "xau_aggressive_scalp_m1";
   } else {
     const [m5, m1] = await Promise.all([

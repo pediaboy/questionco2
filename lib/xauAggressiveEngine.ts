@@ -204,12 +204,13 @@ function liquiditySweep(m3: Candle[], lookback = 10): "BUY" | "SELL" | null {
 // has net-moved >= 25 pips in one direction over the last `lookback` M1 candles,
 // that raw momentum is itself treated as a valid standalone trigger (in addition to,
 // not instead of, the existing PSAR-flip trigger).
-function momentumBreakout(m1: Candle[], pipUnit: number, pipsThreshold = 25, lookback = 10): { direction: "BUY" | "SELL"; pipsMoved: number } | null {
+function momentumBreakout(m1: Candle[], pipUnit: number, nowPrice: number, pipsThreshold = 25, lookback = 10): { direction: "BUY" | "SELL"; pipsMoved: number } | null {
   if (m1.length < lookback + 1) return null;
   const last = m1.length - 1;
   const startClose = m1[last - lookback].close;
-  const nowClose = m1[last].close;
-  const movedPips = (nowClose - startClose) / pipUnit;
+  // Use the live current price (not the last confirmed candle close) as "now" so a
+  // move that happened in the ~60s since the last confirmed candle is still caught.
+  const movedPips = (nowPrice - startClose) / pipUnit;
   if (Math.abs(movedPips) < pipsThreshold) return null;
   return { direction: movedPips > 0 ? "BUY" : "SELL", pipsMoved: Math.abs(movedPips) };
 }
@@ -252,7 +253,7 @@ function nearestSR(zones: SRZone[], currentPrice: number): { resistance: number 
   return { resistance: above[0]?.price ?? null, support: below[0]?.price ?? null };
 }
 
-export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], newsBlackout: boolean, pipUnit: number = 0.1): XauAggressiveResult {
+export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], newsBlackout: boolean, pipUnit: number = 0.1, livePrice?: number): XauAggressiveResult {
   const checklist: { label: string; pass: boolean }[] = [];
 
   if (newsBlackout) {
@@ -265,6 +266,15 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
   const closes = m1.map((c) => c.close);
   const volumes = m1.map((c) => c.volume);
   const last = m1.length - 1;
+
+  // Real current price -- prefer the live OKX ticker (fetched fresh every cron tick,
+  // sub-second accurate) over the last CONFIRMED M1 candle close, which can be up to
+  // ~60s stale (a candle only becomes "confirmed" once the minute fully closes).
+  // Fixes owner complaint 2026-07-20 ("harga dah turun baru ngasih sinyal") -- the
+  // momentum/S/R decision checks below now react to the true current price instead
+  // of a slightly-lagging closed candle. Indicator math (EMA/RSI/PSAR/StochRSI) still
+  // correctly uses confirmed candles only -- those need stable closes, not live ticks.
+  const currentPrice = livePrice ?? closes[last];
 
   const { trend } = parabolicSar(m1, 0.02, 0.2);
   const ema3 = ema(closes, 3);
@@ -293,7 +303,7 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
   }
   checklist.push({ label: "Parabolic SAR (0.02/0.2) Flip", pass: psarFlip !== null });
 
-  const momentum = momentumBreakout(m1, pipUnit, 25, 10);
+  const momentum = momentumBreakout(m1, pipUnit, currentPrice, 25, 10);
   checklist.push({ label: "Momentum Breakout (25 pips / 10min)", pass: momentum !== null });
 
   let triggerSource: "psar" | "momentum" | null = null;
@@ -407,7 +417,7 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
   const basis = ema(closes, 20)[last];
   const upperBand = basis + atr * 1.0;
   const lowerBand = basis - atr * 1.0;
-  const bandTouch = direction === "SELL" ? closes[last] >= upperBand : closes[last] <= lowerBand;
+  const bandTouch = direction === "SELL" ? currentPrice >= upperBand : currentPrice <= lowerBand;
   checklist.push({ label: "ATR Band (x1.0) Rejection Zone", pass: bandTouch });
 
   // Support/Resistance check -- penalize chasing INTO a nearby zone (extended,
@@ -415,33 +425,33 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
   // trade's favor. Not a hard gate -- a confidence adjustment, so a genuinely
   // strong setup can still fire even right at a level, just flagged clearly.
   const srZones = detectSRZones(m5, pipUnit);
-  const { resistance, support } = nearestSR(srZones, closes[last]);
+  const { resistance, support } = nearestSR(srZones, currentPrice);
   const srNearPips = 15;
   let srAdjust = 0;
   let srNote = "";
   if (direction === "BUY" && resistance !== null) {
-    const distPips = (resistance - closes[last]) / pipUnit;
+    const distPips = (resistance - currentPrice) / pipUnit;
     if (distPips <= srNearPips) {
       srAdjust -= 15;
       srNote = `mendekati resistance ${resistance.toFixed(2)} (${Math.round(distPips)} pips lagi) — waspada rejection`;
     }
   }
   if (direction === "BUY" && support !== null) {
-    const distPips = (closes[last] - support) / pipUnit;
+    const distPips = (currentPrice - support) / pipUnit;
     if (distPips <= srNearPips) {
       srAdjust += 10;
       srNote = srNote ? `${srNote}; mantul dari support ${support.toFixed(2)}` : `mantul dari support ${support.toFixed(2)} (${Math.round(distPips)} pips)`;
     }
   }
   if (direction === "SELL" && support !== null) {
-    const distPips = (closes[last] - support) / pipUnit;
+    const distPips = (currentPrice - support) / pipUnit;
     if (distPips <= srNearPips) {
       srAdjust -= 15;
       srNote = `mendekati support ${support.toFixed(2)} (${Math.round(distPips)} pips lagi) — waspada rejection`;
     }
   }
   if (direction === "SELL" && resistance !== null) {
-    const distPips = (resistance - closes[last]) / pipUnit;
+    const distPips = (resistance - currentPrice) / pipUnit;
     if (distPips <= srNearPips) {
       srAdjust += 10;
       srNote = srNote ? `${srNote}; reject dari resistance ${resistance.toFixed(2)}` : `reject dari resistance ${resistance.toFixed(2)} (${Math.round(distPips)} pips)`;
