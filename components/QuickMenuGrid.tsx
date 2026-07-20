@@ -16,6 +16,20 @@ import {
   Cpu,
   History,
   BellRing,
+  BarChart3,
+  Waves,
+  Terminal,
+  ListFilter,
+  PieChart,
+  UserCircle,
+  ScanSearch,
+  AlertTriangle,
+  Store,
+  Binary,
+  Rss,
+  Wallet,
+  FlaskConical,
+  ServerCog,
 } from "lucide-react";
 
 // Icon mapping based on keys returned by the API
@@ -33,6 +47,20 @@ const ICONS: Record<string, React.ComponentType<{ className?: string; size?: num
   Cpu,
   History,
   BellRing,
+  BarChart3,
+  Waves,
+  Terminal,
+  ListFilter,
+  PieChart,
+  UserCircle,
+  ScanSearch,
+  AlertTriangle,
+  Store,
+  Binary,
+  Rss,
+  Wallet,
+  FlaskConical,
+  ServerCog,
 };
 
 interface QuickMenuItem {
@@ -101,25 +129,37 @@ export default function QuickMenuGrid() {
         </div>
       ) : (
         <div className="grid grid-cols-4 gap-x-3 gap-y-4">
-          {items.map((item) => {
+          {items.map((item, idx) => {
             const IconComponent = ICONS[item.icon_key] || NotebookPen;
+            // visual-only section break before the "advanced tools" batch (sort_order >= 14) --
+            // still one flat DB-driven list, just a divider so 27+ items don't feel like one wall.
+            const showDivider = item.sort_order >= 14 && (idx === 0 || items[idx - 1].sort_order < 14);
             return (
-              <Link
-                key={item.id}
-                href={item.href}
-                className="group flex flex-col items-center justify-start text-center"
-              >
-                <div className="w-[60px] h-[60px] flex items-center justify-center bg-black/60 border border-white/10 octagon-precise transition-all duration-200 group-active:border-cyan-400/60 group-active:bg-cyan-950/20 group-active:shadow-[0_0_12px_rgba(0,240,255,0.15)]">
-                  <IconComponent
-                    size={22}
-                    strokeWidth={1.5}
-                    className="text-slate-300 group-active:text-cyan-300 transition-colors duration-200"
-                  />
-                </div>
-                <span className="text-[11px] text-white/70 group-active:text-cyan-300 mt-2 font-sans leading-tight block truncate w-full px-1">
-                  {item.label}
-                </span>
-              </Link>
+              <React.Fragment key={item.id}>
+                {showDivider && (
+                  <div className="col-span-4 mt-1 mb-1 flex items-center gap-3">
+                    <span className="text-[9px] tracking-[0.3em] text-cyan-300/50 font-semibold uppercase font-mono whitespace-nowrap">
+                      [ ALAT LANJUTAN ]
+                    </span>
+                    <div className="flex-1 h-px bg-cyan-400/10" />
+                  </div>
+                )}
+                <Link
+                  href={item.href}
+                  className="group flex flex-col items-center justify-start text-center"
+                >
+                  <div className="w-[60px] h-[60px] flex items-center justify-center bg-black/60 border border-white/10 octagon-precise transition-all duration-200 group-active:border-cyan-400/60 group-active:bg-cyan-950/20 group-active:shadow-[0_0_12px_rgba(0,240,255,0.15)]">
+                    <IconComponent
+                      size={22}
+                      strokeWidth={1.5}
+                      className="text-slate-300 group-active:text-cyan-300 transition-colors duration-200"
+                    />
+                  </div>
+                  <span className="text-[11px] text-white/70 group-active:text-cyan-300 mt-2 font-sans leading-tight block truncate w-full px-1">
+                    {item.label}
+                  </span>
+                </Link>
+              </React.Fragment>
             );
           })}
         </div>
