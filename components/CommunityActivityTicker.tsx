@@ -1,36 +1,64 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { C, Panel, CornerTicks, chamferMicro } from "@/lib/cyberKit";
-import { FeedRow, generateFeedRow, seedFeed } from "@/lib/communityActivityFeed";
 import { Radio, TrendingUp, TrendingDown } from "lucide-react";
 
-const MAX_ROWS = 7;
+interface FeedRow {
+  id: string;
+  alias: string;
+  pair: string;
+  direction: "BUY" | "SELL";
+  modal: number;
+  lot: number;
+  secondsAgo: number;
+}
 
 /**
  * Ambient "Live Community Activity" ticker for the Portfolio page.
- * Purely cosmetic client-side simulation (see lib/communityActivityFeed.ts for
- * exactly what this is/isn't) -- generic aliases, random modal/lot, ticks every
- * second. Does not touch real member data or the real contest standings.
+ * Source: ONLY the existing is_dummy=true demo roster (dummy1-15@leaderboard.local,
+ * the same accounts already used for the "Kontes Capai Lot" leaderboard auto-growth)
+ * via /api/public/dummy-activity -- never real member data. Modal/lot/pair shown
+ * are generated fresh server-side each poll purely for a "live" cosmetic feel;
+ * nothing here is persisted or can affect the real contest standings.
  */
 export default function CommunityActivityTicker() {
   const [rows, setRows] = useState<FeedRow[]>([]);
   const [flash, setFlash] = useState(false);
+  const seqRef = useRef(0);
+
+  const pull = async () => {
+    try {
+      const res = await fetch("/api/public/dummy-activity", { cache: "no-store" });
+      const d = await res.json();
+      if (d.success && Array.isArray(d.items) && d.items.length > 0) {
+        seqRef.current += 1;
+        const seq = seqRef.current;
+        const fresh: FeedRow[] = d.items.map((it: Omit<FeedRow, "secondsAgo" | "id">, i: number) => ({
+          ...it,
+          id: `${seq}-${i}`,
+          secondsAgo: 0,
+        }));
+        setRows(fresh);
+        setFlash(true);
+        setTimeout(() => setFlash(false), 400);
+      }
+    } catch {
+      // silently keep showing the last known rows if a poll fails
+    }
+  };
 
   useEffect(() => {
-    setRows(seedFeed(MAX_ROWS));
-
-    const tick = setInterval(() => {
-      setRows((prev) => {
-        const next = [generateFeedRow(), ...prev.map((r) => ({ ...r, secondsAgo: r.secondsAgo + 1 }))];
-        return next.slice(0, MAX_ROWS);
-      });
-      setFlash(true);
-      setTimeout(() => setFlash(false), 400);
-    }, 1000);
-
-    return () => clearInterval(tick);
+    pull();
+    const pollIv = setInterval(pull, 4000); // fresh dummy-account activity every 4s
+    const secondIv = setInterval(() => {
+      setRows((prev) => prev.map((r) => ({ ...r, secondsAgo: r.secondsAgo + 1 })));
+    }, 1000); // local "Xs lalu" ticking every second, per the owner's "update tiap detik" ask
+    return () => {
+      clearInterval(pollIv);
+      clearInterval(secondIv);
+    };
   }, []);
 
   return (
