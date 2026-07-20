@@ -14,6 +14,12 @@
 // Rule: PSAR flip (within the last 3 confirmed M1 candles) is REQUIRED, plus at
 // least ONE of {EMA3/7 cross, StochRSI extreme-turn} in the same direction — this
 // is the "double confirmation, don't wait for a 2nd candle" setup the owner asked for.
+//
+// TREND FILTER (added 2026-07-20, owner: "bikin ngikut trend, bukan lawan trend,
+// agresif tapi aman"): a HARD gate against the M5 EMA20/50 trend. PSAR-based
+// reversal triggers can easily fire counter-trend, which the owner explicitly does
+// NOT want even for aggressive scalping. The proposed direction must match the M5
+// trend (up=BUY only, down=SELL only); if M5 trend is flat/ambiguous, NO TRADE.
 
 import { Candle, ema } from "./signalEngine";
 
@@ -153,7 +159,19 @@ function stochRsi(rsiArr: number[], stochPeriod = 5, kSmooth = 3, dSmooth = 3): 
   return { k, d };
 }
 
-export function evaluateXauAggressive(m1: Candle[], newsBlackout: boolean): XauAggressiveResult {
+// M5 trend bias via EMA20/EMA50 alignment -- the higher-timeframe direction filter.
+function m5Trend(m5: Candle[]): "up" | "down" | "none" {
+  if (m5.length < 55) return "none";
+  const closes = m5.map((c) => c.close);
+  const e20 = ema(closes, 20);
+  const e50 = ema(closes, 50);
+  const last = closes.length - 1;
+  if (e20[last] > e50[last]) return "up";
+  if (e20[last] < e50[last]) return "down";
+  return "none";
+}
+
+export function evaluateXauAggressive(m1: Candle[], m5: Candle[], newsBlackout: boolean): XauAggressiveResult {
   const checklist: { label: string; pass: boolean }[] = [];
 
   if (newsBlackout) {
@@ -197,6 +215,23 @@ export function evaluateXauAggressive(m1: Candle[], newsBlackout: boolean): XauA
       atr,
       checklist,
       blockReason: "Belum ada PSAR flip",
+    };
+  }
+
+  // 1b. HARD trend gate: M5 EMA20/50 must agree with the PSAR flip direction —
+  // never trade against the higher-timeframe trend, even aggressively.
+  const trendM5 = m5Trend(m5);
+  const trendMatches = (trendM5 === "up" && psarFlip === "BUY") || (trendM5 === "down" && psarFlip === "SELL");
+  checklist.push({ label: "M5 Trend Alignment (EMA20/50)", pass: trendMatches });
+
+  if (!trendMatches) {
+    return {
+      direction: null,
+      confidence: 20,
+      reasoning: `PSAR flip ${psarFlip} tapi trend M5 ${trendM5 === "none" ? "flat/tidak jelas" : trendM5} — lawan trend, NO TRADE`,
+      atr,
+      checklist,
+      blockReason: "PSAR flip melawan trend M5",
     };
   }
 
