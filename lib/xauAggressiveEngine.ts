@@ -20,6 +20,14 @@
 // reversal triggers can easily fire counter-trend, which the owner explicitly does
 // NOT want even for aggressive scalping. The proposed direction must match the M5
 // trend (up=BUY only, down=SELL only); if M5 trend is flat/ambiguous, NO TRADE.
+//
+// LIQUIDITY SWEEP / M3 (added 2026-07-20, owner: "scalping agresif M1 M3 M5
+// liquiditas, kasih aja sinyal mau volatil atau ga"): a 3rd optional 2nd-confirmation
+// alongside EMA3/7 cross and StochRSI turn -- a classic liquidity grab on M3 (a wick
+// sweeps beyond a recent swing high/low then closes back on the other side,
+// signalling stops were hunted before a real move). Nothing here is volatility-gated
+// (no ATR/volume minimum to fire) -- volume spike + ATR band stay pure confidence
+// bonuses, never blockers, exactly per this request.
 
 import { Candle, ema } from "./signalEngine";
 
@@ -171,7 +179,26 @@ function m5Trend(m5: Candle[]): "up" | "down" | "none" {
   return "none";
 }
 
-export function evaluateXauAggressive(m1: Candle[], m5: Candle[], newsBlackout: boolean): XauAggressiveResult {
+// Liquidity sweep on M3: a candle wicks beyond the highest-high/lowest-low of the
+// preceding `lookback` candles, then closes back on the other side of that level --
+// a classic stop-hunt before reversal. Checked over the last 3 confirmed M3 candles.
+function liquiditySweep(m3: Candle[], lookback = 10): "BUY" | "SELL" | null {
+  if (m3.length < lookback + 4) return null;
+  const last = m3.length - 1;
+  for (let i = last; i >= Math.max(lookback + 1, last - 2); i--) {
+    const window = m3.slice(i - lookback, i);
+    const swingHigh = Math.max(...window.map((c) => c.high));
+    const swingLow = Math.min(...window.map((c) => c.low));
+    const c = m3[i];
+    // Swept above a recent high (wick) but closed back below it -> bearish sweep -> SELL.
+    if (c.high > swingHigh && c.close < swingHigh) return "SELL";
+    // Swept below a recent low (wick) but closed back above it -> bullish sweep -> BUY.
+    if (c.low < swingLow && c.close > swingLow) return "BUY";
+  }
+  return null;
+}
+
+export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], newsBlackout: boolean): XauAggressiveResult {
   const checklist: { label: string; pass: boolean }[] = [];
 
   if (newsBlackout) {
@@ -267,13 +294,20 @@ export function evaluateXauAggressive(m1: Candle[], m5: Candle[], newsBlackout: 
   const stochConfirms = stochTurn === psarFlip;
   checklist.push({ label: "Stochastic RSI (5,3,3) Extreme Turn", pass: stochConfirms });
 
-  // Aggressive gate: PSAR flip is mandatory, plus >=1 of {EMA cross, StochRSI turn}
-  // in the SAME direction ("double confirmation", no waiting for a 2nd candle).
-  if (!emaConfirms && !stochConfirms) {
+  // 2b. Liquidity sweep on M3, same direction as PSAR flip -- a 3rd option for the
+  // required 2nd confirmation (stop-hunt reversal pattern, not volatility-gated).
+  const sweep = liquiditySweep(m3, 10);
+  const sweepConfirms = sweep === psarFlip;
+  checklist.push({ label: "Liquidity Sweep (M3)", pass: sweepConfirms });
+
+  // Aggressive gate: PSAR flip is mandatory, plus >=1 of {EMA cross, StochRSI turn,
+  // M3 liquidity sweep} in the SAME direction ("double confirmation", no waiting
+  // for a 2nd candle, fires regardless of volatility).
+  if (!emaConfirms && !stochConfirms && !sweepConfirms) {
     return {
       direction: null,
       confidence: 35,
-      reasoning: `PSAR flip ${psarFlip} terdeteksi tapi belum ada konfirmasi kedua (EMA3/7 atau StochRSI) — NO TRADE`,
+      reasoning: `PSAR flip ${psarFlip} terdeteksi tapi belum ada konfirmasi kedua (EMA3/7, StochRSI, atau Liquidity Sweep M3) — NO TRADE`,
       atr,
       checklist,
       blockReason: "PSAR flip tanpa konfirmasi kedua",
@@ -293,15 +327,17 @@ export function evaluateXauAggressive(m1: Candle[], m5: Candle[], newsBlackout: 
   const bandTouch = direction === "SELL" ? closes[last] >= upperBand : closes[last] <= lowerBand;
   checklist.push({ label: "ATR Band (x1.0) Rejection Zone", pass: bandTouch });
 
+  const confirmCount = [emaConfirms, stochConfirms, sweepConfirms].filter(Boolean).length;
   let confidence = 62;
-  if (emaConfirms && stochConfirms) confidence += 15; // all 3 core confirmations aligned
+  if (confirmCount >= 2) confidence += 15; // 2+ of 3 confirmations aligned
   if (volumeSpike) confidence += 13;
   if (bandTouch) confidence += 10;
   confidence = Math.min(95, confidence);
 
-  const parts = [`PSAR flip ${direction}`];
+  const parts = [`PSAR flip ${direction}`, `trend M5 ${trendM5}`];
   if (emaConfirms) parts.push("EMA3/7 cross confirm");
   if (stochConfirms) parts.push("StochRSI extreme-turn confirm");
+  if (sweepConfirms) parts.push("Liquidity Sweep M3 confirm");
   if (volumeSpike) parts.push("volume spike 2x");
   if (bandTouch) parts.push("ATR band rejection");
 

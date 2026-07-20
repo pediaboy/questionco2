@@ -334,11 +334,12 @@ async function processPair(
   let strategyMode: string;
 
   if (isXauAggressive) {
-    const [m1Aggr, m5Aggr] = await Promise.all([
+    const [m1Aggr, m3Aggr, m5Aggr] = await Promise.all([
       fetchOkxCandles(pair.dataInstId, "1m", 150),
+      fetchOkxCandles(pair.dataInstId, "3m", 60),
       fetchOkxCandles(pair.dataInstId, "5m", 60),
     ]);
-    result = evaluateXauAggressive(m1Aggr, m5Aggr, newsBlackout);
+    result = evaluateXauAggressive(m1Aggr, m3Aggr, m5Aggr, newsBlackout);
     strategyMode = "xau_aggressive_scalp_m1";
   } else {
     const [m5, m1] = await Promise.all([
