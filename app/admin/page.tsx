@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { ShieldCheck, RefreshCw, Check, X, RotateCcw, Edit2, Trash2, BarChart3, UserPlus, KeyRound, Trophy, Radio, ListPlus } from "lucide-react";
+import { ShieldCheck, RefreshCw, Check, X, RotateCcw, Edit2, Trash2, BarChart3, UserPlus, KeyRound, Trophy, Radio, ListPlus, Cpu, ShieldAlert, SlidersHorizontal, Terminal } from "lucide-react";
 import { isAdminAuthed, setAdminAuthed, ADMIN_USER, ADMIN_PASS } from "@/lib/adminAuth";
 
 type Invoice = {
@@ -378,7 +378,7 @@ export default function AdminPage() {
 
   return (
     <div className="min-h-screen max-w-3xl mx-auto px-5 py-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-3">
         <h1 className="font-display font-bold text-white text-xl uppercase">Admin Panel</h1>
         <div className="flex items-center gap-4">
           <Link href="/admin/leaderboard" className="text-yellow-400 flex items-center gap-1.5 text-xs">
@@ -397,6 +397,20 @@ export default function AdminPage() {
             Logout
           </button>
         </div>
+      </div>
+      <div className="flex items-center gap-4 mb-6 pb-4 border-b border-white/10 flex-wrap">
+        <Link href="/engine-settings" className="text-cyan-300 flex items-center gap-1.5 text-[11px]">
+          <Cpu size={13} /> Engine Config
+        </Link>
+        <Link href="/risk-management" className="text-cyan-300 flex items-center gap-1.5 text-[11px]">
+          <ShieldAlert size={13} /> Risk Params
+        </Link>
+        <Link href="/strategy-editor" className="text-cyan-300 flex items-center gap-1.5 text-[11px]">
+          <SlidersHorizontal size={13} /> Strategy Editor
+        </Link>
+        <Link href="/system-logs" className="text-cyan-300 flex items-center gap-1.5 text-[11px]">
+          <Terminal size={13} /> System Logs
+        </Link>
       </div>
 
       <h2 className="text-white/70 text-sm font-bold mb-3 tracking-wide">

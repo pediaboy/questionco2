@@ -27,6 +27,8 @@ import {
   ShieldCheck,
   Gift,
   Ticket,
+  History,
+  BellRing,
 } from "lucide-react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import VipUpgradeModal from "./VipUpgradeModal";
@@ -46,6 +48,7 @@ const CATEGORIES: { title: string; items: FeatureItem[] }[] = [
       { label: "Chart", href: "/dashboard/chart", icon: LineChart },
       { label: "Terminal", href: "/dashboard/terminal", icon: Activity, vipOnly: true },
       { label: "Analisa", href: "/analisa", icon: Newspaper },
+      { label: "Riwayat Sinyal", href: "/signal-history", icon: History },
     ],
   },
   {
@@ -85,6 +88,7 @@ const CATEGORIES: { title: string; items: FeatureItem[] }[] = [
       { label: "Keamanan", href: "/security", icon: ShieldCheck },
       { label: "Affiliate", href: "/affiliate", icon: Gift },
       { label: "Tiket Bantuan", href: "/support-tickets", icon: Ticket },
+      { label: "Alert Rules", href: "/alert-rules", icon: BellRing },
     ],
   },
 ];
