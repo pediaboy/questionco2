@@ -1,82 +1,23 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
+/**
+ * Auto Watchlist feed -- READ ONLY. There is no manual add/remove anymore
+ * (owner request 2026-07-21: "bukan manual isi, tapi otomatis kalo ada coin
+ * yg bagus bakal masuk"). Rows are written exclusively by the cron scanner at
+ * /api/cron/watchlist-scan (lib/autoWatchlistEngine.ts), every 5 minutes,
+ * based on real OKX 1H momentum/volume/breakout criteria. This is a public
+ * market-data feed (like /api/public/latest-signal), no per-user auth needed.
+ */
 export const dynamic = "force-dynamic";
 
-function getToken(req: NextRequest) {
-  const auth = req.headers.get("authorization") || "";
-  return auth.replace(/^Bearer\s+/i, "").trim();
-}
-
-async function requireUser(req: NextRequest) {
-  const token = getToken(req);
-  if (!token) return null;
-  const admin = getSupabaseAdmin();
-  const { data, error } = await admin.auth.getUser(token);
-  if (error || !data?.user) return null;
-  return data.user;
-}
-
-export async function GET(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ success: false, message: "Sesi tidak valid" }, { status: 401 });
-
+export async function GET() {
   const admin = getSupabaseAdmin();
   const { data, error } = await admin
-    .from("qco2_watchlist")
-    .select("id, pair, created_at")
-    .eq("auth_user_id", user.id)
-    .order("created_at", { ascending: true });
+    .from("qco2_auto_watchlist")
+    .select("id, pair, direction, score, change_1h, change_4h, volume_ratio, is_breakout, last_price, reasoning, first_detected_at, last_seen_at")
+    .order("score", { ascending: false });
 
   if (error) return NextResponse.json({ success: false, message: error.message }, { status: 500 });
-  return NextResponse.json({ success: true, items: data || [] });
-}
-
-export async function POST(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ success: false, message: "Sesi tidak valid" }, { status: 401 });
-
-  const body = await req.json();
-  const pair = (body.pair || "").trim().toUpperCase();
-  if (!pair) return NextResponse.json({ success: false, message: "Pair wajib diisi" }, { status: 400 });
-
-  const admin = getSupabaseAdmin();
-  const { data: existing } = await admin
-    .from("qco2_watchlist")
-    .select("id")
-    .eq("auth_user_id", user.id)
-    .limit(50);
-  if (existing && existing.length >= 20) {
-    return NextResponse.json({ success: false, message: "Maksimal 20 pair di watchlist" }, { status: 400 });
-  }
-
-  const { data, error } = await admin
-    .from("qco2_watchlist")
-    .insert({ auth_user_id: user.id, pair })
-    .select()
-    .single();
-
-  if (error) {
-    if (error.code === "23505") {
-      return NextResponse.json({ success: false, message: "Pair sudah ada di watchlist" }, { status: 409 });
-    }
-    return NextResponse.json({ success: false, message: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ success: true, item: data });
-}
-
-export async function DELETE(req: NextRequest) {
-  const user = await requireUser(req);
-  if (!user) return NextResponse.json({ success: false, message: "Sesi tidak valid" }, { status: 401 });
-
-  const { searchParams } = new URL(req.url);
-  const id = searchParams.get("id");
-  if (!id) return NextResponse.json({ success: false, message: "id wajib diisi" }, { status: 400 });
-
-  const admin = getSupabaseAdmin();
-  const { error } = await admin.from("qco2_watchlist").delete().eq("id", id).eq("auth_user_id", user.id);
-  if (error) return NextResponse.json({ success: false, message: error.message }, { status: 500 });
-
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, items: data || [], scannedAt: new Date().toISOString() });
 }

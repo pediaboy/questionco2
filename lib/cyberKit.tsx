@@ -12,6 +12,7 @@
 
 import React from "react";
 import { ShieldAlert } from "lucide-react";
+import { motion } from "framer-motion";
 
 export const C = {
   bg: "#05080F",
@@ -58,6 +59,33 @@ export function Panel({
         {children}
       </div>
     </div>
+  );
+}
+
+
+/* Flickery duplicated-text glitch effect for HUD section labels -- cyan main
+ * layer + a faint red ghost layer that briefly desyncs, like a scanline glitch. */
+export function GlitchText({ text }: { text: string }) {
+  return (
+    <span className="relative inline-block font-mono text-[10px] font-bold uppercase tracking-[0.25em]">
+      <motion.span
+        className="relative z-10"
+        style={{ color: C.cyan }}
+        animate={{ x: [0, -1, 1, 0], opacity: [1, 0.85, 1] }}
+        transition={{ duration: 0.18, repeat: Infinity, repeatDelay: 2.4 }}
+      >
+        {text}
+      </motion.span>
+      <motion.span
+        className="absolute left-0 top-0 z-0"
+        style={{ color: C.red }}
+        animate={{ x: [0, 2, -1, 0], opacity: [0, 0.6, 0] }}
+        transition={{ duration: 0.18, repeat: Infinity, repeatDelay: 2.4 }}
+        aria-hidden="true"
+      >
+        {text}
+      </motion.span>
+    </span>
   );
 }
 
