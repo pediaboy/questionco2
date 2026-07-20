@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import { C, Panel, CornerTicks, VipGateOverlay, ZeroDummyDisclosure } from "@/lib/cyberKit";
+import CommunityActivityTicker from "@/components/CommunityActivityTicker";
 import { CONTEST_TIERS, getNextTier, getProgressPercent } from "@/lib/contestTiers";
 import { 
   Trophy, 
@@ -278,6 +279,9 @@ export default function PortfolioPage() {
 
             </div>
           </Panel>
+
+          {/* Section: Live Community Activity ticker (cosmetic ambient feed, see lib/communityActivityFeed.ts) */}
+          <CommunityActivityTicker />
 
           {/* Section: Disclaimers / Community standing policies */}
           <ZeroDummyDisclosure />
