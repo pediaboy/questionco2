@@ -14,6 +14,8 @@ import {
   Award,
   Activity,
   Cpu,
+  History,
+  BellRing,
 } from "lucide-react";
 
 // Icon mapping based on keys returned by the API
@@ -29,6 +31,8 @@ const ICONS: Record<string, React.ComponentType<{ className?: string; size?: num
   Award,
   Activity,
   Cpu,
+  History,
+  BellRing,
 };
 
 interface QuickMenuItem {
