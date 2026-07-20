@@ -100,8 +100,8 @@ export default function RiskManagementPage() {
       </div>
 
       <div className="border border-cyan-400/20 chamfer-sm bg-[#0b0f18]/70 p-4 mb-5">
-        <span className="text-xs font-bold text-white/80 uppercase tracking-wider block mb-3">Risk:Reward Targets (TP1/TP2/TP3)</span>
-        <div className="grid grid-cols-3 gap-3">
+        <span className="text-xs font-bold text-white/80 uppercase tracking-wider block mb-3">Risk:Reward Targets (TP1/TP2/TP3/TP4)</span>
+        <div className="grid grid-cols-4 gap-3">
           {settings.rr_targets.map((rr, i) => (
             <div key={i}>
               <p className="text-[10px] text-white/30 mb-1">TP{i + 1}</p>
@@ -119,7 +119,7 @@ export default function RiskManagementPage() {
             </div>
           ))}
         </div>
-        <p className="text-[10px] text-white/30 mt-2">TP{"{n}"} = Entry ± (RR{"{n}"} × jarak SL). Contoh RR 1:2/1:3/1:4 default.</p>
+        <p className="text-[10px] text-white/30 mt-2">TP{"{n}"} = Entry ± (RR{"{n}"} × jarak SL). Contoh RR 1:2/1:3/1:4/1:6 default.</p>
       </div>
 
       <button

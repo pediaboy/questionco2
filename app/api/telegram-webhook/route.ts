@@ -147,12 +147,16 @@ function fmtNum(n: number, decimals: number) {
 function buildSignalMessage(pairKey: string, direction: string, entry: number, sl: number, tps: number[]): string {
   const cfg = SIGNAL_PAIRS.find((p) => p.key === pairKey);
   const decimals = cfg && cfg.pipUnit < 1 ? 2 : 0;
-  const tpLines = tps.map((tp, i) => `TP${i + 1} → ${fmtNum(tp, decimals)}`).join("\n");
+  const pipUnit = cfg?.pipUnit || 1;
+  const pips = (price: number) => Math.round(Math.abs(price - entry) / pipUnit);
+  const tpLines = tps.map((tp, i) => `   TP${i + 1}  ›  ${fmtNum(tp, decimals)}  (${pips(tp)} pips)`).join("\n");
   return (
-    `<b>LASTQUESTION.CO — SIGNAL</b>\n\n` +
-    `📊 PAIR   : ${pairKey}\n📈 SETUP  : ${direction}\n🎯 ENTRY  : ${fmtNum(entry, decimals)}\n\n` +
-    `🎯 TAKE PROFIT\n${tpLines}\n\n🔴 STOP LOSS : ${fmtNum(sl, decimals)}\n\n` +
-    `⚠️ Gunakan money management. Amankan profit bertahap.\n\n#${pairKey}\n\nlastquestion.store`
+    `⚜️ <b>LASTQUESTION VVIP SIGNAL</b> ⚜️\n━━━━━━━━━━━━━━━━\n\n` +
+    `📊 PAIR    : ${pairKey}\n📈 SETUP   : <b>${direction}</b>\n🎯 ENTRY   : ${fmtNum(entry, decimals)}\n\n` +
+    `🎯 TAKE PROFIT\n${tpLines}\n\n` +
+    `🛑 STOP LOSS : ${fmtNum(sl, decimals)}  (${pips(sl)} pips)\n\n` +
+    `⚠️ Gunakan money management.\nAmankan profit di TP1 / TP2, hindari overtrade.\n\n` +
+    `#LASTQUESTIONVVIP\n━━━━━━━━━━━━━━━━\nlastquestion.store`
   );
 }
 

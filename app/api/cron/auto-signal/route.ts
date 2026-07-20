@@ -15,7 +15,7 @@ const CRON_SECRET = "7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d";
 const BE_THRESHOLDS = [30, 50, 70];
 const TIMEOUT_MINUTES = 60;
 const ATR_SL_MULTIPLIER = 1.5;
-const RR_TARGETS = [2, 3, 4]; // TP1=RR1:2 (minimum), TP2=RR1:3 (ideal), TP3=RR1:4 (extended)
+const RR_TARGETS = [2, 3, 4, 6]; // TP1=RR1:2, TP2=RR1:3, TP3=RR1:4, TP4=RR1:6 (extended runner)
 
 function isWeekendWIB(): boolean {
   const now = new Date();
@@ -44,28 +44,35 @@ function buildInstitutionalSignalMessage(
   sl: number,
   tps: number[],
   decimals: number,
-  trend: "up" | "down" | "none",
-  confidence: number,
-  reasoning: string,
-  checklist: { label: string; pass: boolean }[]
+  _trend: "up" | "down" | "none",
+  _confidence: number,
+  _reasoning: string,
+  _checklist: { label: string; pass: boolean }[]
 ) {
+  // Clean customer-facing "VVIP signal" style (2026-07-20, per owner's exact
+  // reference example) — technical confidence/reasoning/checklist stay in the DB
+  // (still shown on /signal-details and /system-logs for transparency) but are no
+  // longer dumped into the raw Telegram blast members receive.
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  const checklistLines = checklist
-    .filter((c) => !["Trend (EMA20/50/200)"].includes(c.label))
-    .map((c) => `${c.label} ${c.pass ? "✔" : "✘"}`)
+  const pips = (price: number) => Math.round(Math.abs(price - entry) / pair.pipUnit);
+
+  // Cosmetic entry zone: a small buffer toward the more favorable fill price
+  // (higher for SELL, lower for BUY) — 3 pips wide, matching the owner's example.
+  const zoneBuffer = 3 * pair.pipUnit;
+  const zoneLow = direction === "SELL" ? entry : entry - zoneBuffer;
+  const zoneHigh = direction === "SELL" ? entry + zoneBuffer : entry;
+
+  const tpLines = tps
+    .map((tp, i) => `   TP${i + 1}  ›  ${fmt(tp)}  (${pips(tp)} pips)`)
     .join("\n");
 
   return (
-    `🚨 <b>SCALPING SIGNAL</b>\n━━━━━━━━━━━━━━━━\n\n` +
-    `Pair : <b>${pair.label}</b>\nTimeframe : M1/M5\nTrend : <b>${trend.toUpperCase()}</b>\n\n` +
-    `Signal : <b>${direction}</b>\n\n` +
-    `Entry : <b>${fmt(entry)}</b>\nStoploss : <b>${fmt(sl)}</b>\n` +
-    `Take Profit 1 : <b>${fmt(tps[0])}</b>  (RR 1:${RR_TARGETS[0]})\n` +
-    `Take Profit 2 : <b>${fmt(tps[1])}</b>  (RR 1:${RR_TARGETS[1]})\n` +
-    `Take Profit 3 : <b>${fmt(tps[2])}</b>  (RR 1:${RR_TARGETS[2]})\n\n` +
-    `Risk Reward : 1:${RR_TARGETS[0]} - 1:${RR_TARGETS[2]}\nConfidence : <b>${confidence}%</b>\n\n` +
-    `Alasan : ${reasoning}\n\n` +
-    `Checklist :\n${checklistLines}\n\n#${pair.label}\n\nlastquestion.store`
+    `⚜️ <b>LASTQUESTION VVIP SIGNAL</b> ⚜️\n━━━━━━━━━━━━━━━━\n\n` +
+    `📊 PAIR    : ${pair.label}\n📈 SETUP   : <b>${direction}</b>\n🎯 ENTRY   : ${fmt(zoneLow)} – ${fmt(zoneHigh)}\n\n` +
+    `🎯 TAKE PROFIT\n${tpLines}\n\n` +
+    `🛑 STOP LOSS : ${fmt(sl)}  (${pips(sl)} pips)\n\n` +
+    `⚠️ Gunakan money management.\nAmankan profit di TP1 / TP2, hindari overtrade.\n\n` +
+    `#LASTQUESTIONVVIP\n━━━━━━━━━━━━━━━━\nlastquestion.store`
   );
 }
 
@@ -77,20 +84,21 @@ function buildTelegramCloseMessage(
   decimals: number,
   entry: number
 ) {
+  // Compact style (2026-07-20, per owner's exact reference example) — no divider
+  // block, just the essential fields.
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  const pipsMoved = Math.round(Math.abs(price - entry) / pair.pipUnit);
 
   if (hitLevel === "sl") {
-    return `🔴 <b>STOP LOSS HIT</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📉 ARAH     : ${direction}\n💥 SL HIT   : ${fmt(price)}\n\nSignal ditutup sesuai rencana risiko.\n🔓 Slot signal baru sudah terbuka.\n\n📌 Disiplin di SL adalah kunci bertahan jangka panjang.\n\n#${pair.label}`;
+    return `🔴 <b>SL TERKENA — ${pair.label}</b>\n🛑 SL    : ${fmt(price)}\n📉 PIPS  : -${pipsMoved}`;
   }
 
-  const tpIndex = Number(hitLevel.replace("tp", ""));
-  const pipsGained = Math.abs(price - entry);
-  return `✅ <b>${hitLevel.toUpperCase()} HIT — PROFIT!</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 ARAH     : ${direction}\n🎯 HARGA    : ${fmt(price)}\n💰 PROFIT   : +${fmt(pipsGained)} ${pair.pipLabelSuffix}\n\n${tpIndex >= 2 ? "Selamat! Sisa posisi bisa di-trailing atau full close sesuai rencana." : "Amankan sebagian profit, geser SL ke entry untuk sisa posisi."}\n\n#${pair.label}`;
+  return `✅ <b>${hitLevel.toUpperCase()} TERCAPAI — ${pair.label}</b>\n🎯 ${hitLevel.toUpperCase()} : ${fmt(price)}\n📈 PIPS : ${pipsMoved}\n💵 PROFIT : +${pipsMoved} pips`;
 }
 
 function buildBEMessage(pair: PairConfig, threshold: number, pipsRunning: number, decimals: number) {
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: decimals });
-  return `🔐 <b>AMANKAN POSISI — SET BE</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 RUNNING  : ${fmt(pipsRunning)} ${pair.pipLabelSuffix}\n🎯 TRIGGER  : ${threshold} ${pair.pipLabelSuffix}\n\n✅ Posisi sudah masuk area aman.\nGeser SL ke entry (Break Even) untuk mengunci modal.\n\n#${pair.label}`;
+  return `🔐 <b>AMANKAN POSISI — SET BE</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 RUNNING  : ${fmt(pipsRunning)} ${pair.pipLabelSuffix}\n🎯 TRIGGER  : ${threshold} ${pair.pipLabelSuffix}\n\n✅ Posisi sudah masuk area aman.\nGeser SL ke entry (Break Even) untuk mengunci modal.`;
 }
 
 function buildTimeoutMessage() {
@@ -216,7 +224,7 @@ async function processPair(
   if (active) {
     // Monitor for TP/SL hit.
     const dir = active.direction as "BUY" | "SELL";
-    const tps: number[] = [active.take_profit, active.tp2, active.tp3].filter((v) => v !== null && v !== undefined);
+    const tps: number[] = [active.take_profit, active.tp2, active.tp3, active.tp4].filter((v) => v !== null && v !== undefined);
     const sl = active.stop_loss;
 
     let hit: { level: string; price: number } | null = null;
@@ -318,7 +326,7 @@ async function processPair(
       take_profit: tps[0],
       tp2: tps[1],
       tp3: tps[2],
-      tp4: null,
+      tp4: tps[3] ?? null,
       pip_unit: pair.pipUnit,
       source: "auto",
       status: "active",
