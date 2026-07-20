@@ -10,6 +10,7 @@ import { PairConfig } from "@/lib/signalPairs";
 import { sendToChannel, InlineKeyboard } from "@/lib/telegramApi";
 import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
 import { getLivePriceForPair } from "@/lib/signalEngine";
+import { sendPushToAll } from "@/lib/pushNotify";
 
 export const BE_THRESHOLDS = [20, 50, 70]; // first level lowered 30->20 per owner request 2026-07-20
 
@@ -17,9 +18,24 @@ export function decimalsFor(pair: PairConfig): number {
   return pair.pipUnit < 1 ? 2 : 0;
 }
 
+// Derives a short push-notification title+body from a Telegram HTML alert message
+// (BE/TP/SL/timeout all share this shape: an emoji+bold headline line, then detail
+// lines). Keeps push notifications in lockstep with whatever the channel says without
+// needing a separate payload built at every call site.
+function toPushPayload(text: string): { title: string; body: string } {
+  const plain = text.replace(/<[^>]+>/g, "");
+  const lines = plain.split("\n").map((l) => l.trim()).filter((l) => l && !/^[━\-—]+$/.test(l));
+  const title = lines[0] || "Update Sinyal";
+  const body = lines.slice(1, 4).join(" · ").slice(0, 160) || "Cek detail di halaman Sinyal.";
+  return { title, body };
+}
+
 export async function sendSignalAlert(audience: string | null | undefined, text: string, keyboard?: InlineKeyboard) {
   await sendToChannel(vipChannelId(), text, keyboard);
   if (audience === "public") await sendToChannel(publicChannelId(), text, keyboard);
+
+  const { title, body } = toPushPayload(text);
+  sendPushToAll({ title, body, url: "/dashboard/sinyal", tag: "qco2-signal" }).catch(() => null);
 }
 
 export function buildTelegramCloseMessage(

@@ -13,6 +13,7 @@ import { TELEGRAM_ADMIN_ID, vipChannelId, publicChannelId, SIGNAL_PAIR_OPTIONS, 
 import { SIGNAL_PAIRS } from "@/lib/signalPairs";
 import { getLivePriceForPair } from "@/lib/signalEngine";
 import { advanceTp, closeViaSl, advanceBe, decimalsFor } from "@/lib/signalAlerts";
+import { sendPushToUser } from "@/lib/pushNotify";
 
 export const dynamic = "force-dynamic";
 
@@ -845,6 +846,36 @@ export async function POST(req: NextRequest) {
     if (fromId !== TELEGRAM_ADMIN_ID) {
       await sendMessage(chatId, "Bot ini khusus admin LASTQUESTION.CO.");
       return NextResponse.json({ ok: true });
+    }
+
+    // ---- Live Chat reply routing ----
+    // If the admin hits "Reply" on a message that was a live-chat DM forward (see
+    // app/api/live-chat/route.ts), route whatever they typed straight back into that
+    // member's chat thread + push it to their device. Works from ANY session state
+    // (idle or mid-wizard) since it's a distinct gesture (reply-to-message), not a
+    // wizard step.
+    if (msg.reply_to_message?.message_id) {
+      const { data: chatMap } = await admin
+        .from("qco2_live_chat_tg_map")
+        .select("auth_user_id")
+        .eq("tg_message_id", msg.reply_to_message.message_id)
+        .maybeSingle();
+      if (chatMap) {
+        await deleteMessage(chatId, messageId).catch(() => {});
+        if (!text) {
+          await sendMessage(chatId, "⚠️ Live chat cuma dukung balasan teks.");
+          return NextResponse.json({ ok: true });
+        }
+        await admin.from("qco2_live_chat_messages").insert({ auth_user_id: chatMap.auth_user_id, sender: "admin", message: text });
+        sendPushToUser(chatMap.auth_user_id, {
+          title: "Admin membalas pesan Anda",
+          body: text.slice(0, 140),
+          url: "/live-chat",
+          tag: "qco2-livechat",
+        }).catch(() => null);
+        await sendMessage(chatId, "✅ Terkirim ke live chat user.");
+        return NextResponse.json({ ok: true });
+      }
     }
 
     if (text === "/start" || text === "/admin") {

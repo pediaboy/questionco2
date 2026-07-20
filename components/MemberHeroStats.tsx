@@ -67,7 +67,7 @@ export default function MemberHeroStats({ profile }: MemberHeroStatsProps) {
         return (
           <div
             key={i}
-            className="chamfer-sm bg-[#0f172a]/70 backdrop-blur-sm border border-white/10 p-4 relative flex flex-col justify-between h-[110px] active:border-cyan-400 active:shadow-[0_0_15px_rgba(0,240,255,0.3)] transition-all duration-200"
+            className="chamfer-sm bg-[#0f172a]/70 backdrop-blur-sm border border-white/10 p-4 relative flex flex-col gap-1.5 min-h-[110px] active:border-cyan-400 active:shadow-[0_0_15px_rgba(0,240,255,0.3)] transition-all duration-200"
           >
             <div className="absolute top-[3px] left-[3px] w-2.5 h-2.5 border-t border-l border-cyan-400/70" />
             <div className="absolute bottom-[3px] right-[3px] w-2.5 h-2.5 border-b border-r border-cyan-400/70" />
@@ -79,8 +79,12 @@ export default function MemberHeroStats({ profile }: MemberHeroStatsProps) {
               </span>
             </div>
 
-            <div className="my-1">
-              <span className={`font-mono font-bold text-2xl tracking-tight ${stat.valueColor || "text-white"}`}>
+            <div className="flex-1 flex items-center min-w-0">
+              <span
+                className={`font-mono font-bold tracking-tight leading-tight break-words ${
+                  stat.value.length > 9 ? "text-lg" : "text-2xl"
+                } ${stat.valueColor || "text-white"}`}
+              >
                 {stat.value}
               </span>
             </div>
@@ -99,7 +103,7 @@ export default function MemberHeroStats({ profile }: MemberHeroStatsProps) {
           the same 1s global-stats poll as the other 3 cards). */}
       <Link
         href="/dashboard/sinyal"
-        className="chamfer-sm bg-[#0f172a]/70 backdrop-blur-sm border border-white/10 p-4 relative flex flex-col justify-between h-[110px] active:border-cyan-400 active:shadow-[0_0_15px_rgba(0,240,255,0.3)] transition-all duration-200"
+        className="chamfer-sm bg-[#0f172a]/70 backdrop-blur-sm border border-white/10 p-4 relative flex flex-col gap-1.5 min-h-[110px] active:border-cyan-400 active:shadow-[0_0_15px_rgba(0,240,255,0.3)] transition-all duration-200"
       >
         <div className="absolute top-[3px] left-[3px] w-2.5 h-2.5 border-t border-l border-cyan-400/70" />
         <div className="absolute bottom-[3px] right-[3px] w-2.5 h-2.5 border-b border-r border-cyan-400/70" />
@@ -113,10 +117,10 @@ export default function MemberHeroStats({ profile }: MemberHeroStatsProps) {
           </span>
         </div>
 
-        <div className="my-1 min-w-0">
+        <div className="flex-1 flex items-center min-w-0">
           {sig ? (
             <span
-              className={`font-mono font-bold text-lg tracking-tight block truncate ${
+              className={`font-mono font-bold text-lg tracking-tight leading-tight break-words ${
                 sigIsBuy ? "text-emerald-400" : "text-rose-400"
               }`}
             >
