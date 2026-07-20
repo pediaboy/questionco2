@@ -3,7 +3,7 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LogIn, Loader2, ArrowLeft } from "lucide-react";
-import { supabase } from "@/lib/supabaseClient";
+import { supabase, setRememberMe } from "@/lib/supabaseClient";
 
 function LoginForm() {
   const router = useRouter();
@@ -11,6 +11,7 @@ function LoginForm() {
   const justRegistered = params.get("registered") === "1";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -18,6 +19,10 @@ function LoginForm() {
     e.preventDefault();
     setLoading(true);
     setError("");
+    // Set BEFORE signIn so the session gets written to the right storage
+    // (localStorage = persists across browser restarts, sessionStorage =
+    // cleared when the browser/tab closes; logout always clears both).
+    setRememberMe(remember);
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
     if (error) {
@@ -75,6 +80,19 @@ function LoginForm() {
         />
 
         {error && <p className="text-red-400 text-[11px]">{error}</p>}
+
+        <label className="flex items-center gap-2.5 select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+            className="peer sr-only"
+          />
+          <span className="w-4 h-4 shrink-0 chamfer-sm border border-cyan-400/40 bg-[#0b0f18] flex items-center justify-center peer-checked:bg-cyan-400 peer-checked:border-cyan-400 transition-colors">
+            {remember && <span className="w-2 h-2 bg-black" />}
+          </span>
+          <span className="text-[11.5px] text-white/50 tracking-wide">Ingat saya di perangkat ini</span>
+        </label>
 
         <button
           type="submit"

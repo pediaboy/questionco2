@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   X,
+  Home,
   Radio,
   LineChart,
   Newspaper,
@@ -83,6 +84,7 @@ const CATEGORIES: { title: string; items: FeatureItem[] }[] = [
   {
     title: "AKUN",
     items: [
+      { label: "Ke Beranda", href: "/", icon: Home },
       { label: "Profil", href: "/profile", icon: UserRound },
       { label: "Pengaturan", href: "/settings", icon: SettingsIcon },
       { label: "Watchlist", href: "/watchlist", icon: Star },
