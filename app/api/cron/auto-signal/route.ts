@@ -6,21 +6,13 @@ import { evaluateXauAggressive } from "@/lib/xauAggressiveEngine";
 import { isNewsBlackout } from "@/lib/newsFilter";
 import { getActiveSessions } from "@/lib/marketSessions";
 import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
-import { sendToChannel, InlineKeyboard } from "@/lib/telegramApi";
+import { sendToChannel } from "@/lib/telegramApi";
 import { vipChannelId, publicChannelId, signalStatusKeyboard } from "@/lib/telegramBotConfig";
-
-// Any signal (auto OR manual) is monitored the same way -- alerts always go to the
-// VIP channel, and ALSO to the public channel when the signal's audience is public.
-// This mirrors the exact routing the manual-signal creation flow already uses.
-async function sendSignalAlert(audience: string | null | undefined, text: string, keyboard?: InlineKeyboard) {
-  await sendToChannel(vipChannelId(), text, keyboard);
-  if (audience === "public") await sendToChannel(publicChannelId(), text, keyboard);
-}
+import { sendSignalAlert, advanceTp, closeViaSl, advanceBe, BE_THRESHOLDS } from "@/lib/signalAlerts";
 
 export const dynamic = "force-dynamic";
 
 const CRON_SECRET = "7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d";
-const BE_THRESHOLDS = [20, 50, 70]; // first level lowered 30->20 per owner request 2026-07-20
 const AUTO_COOLDOWN_MINUTES = 30; // no fresh auto signal for a pair within 30min of its last auto signal closing (owner request 2026-07-20)
 const TIMEOUT_MINUTES = 60;
 // XAU Aggressive scalping needs a much shorter timeout (owner request 2026-07-20:
@@ -89,45 +81,6 @@ function buildInstitutionalSignalMessage(
     `⚠️ Gunakan money management.\nAmankan profit di TP1 / TP2, hindari overtrade.\n\n` +
     `#LASTQUESTIONVVIP\n━━━━━━━━━━━━━━━━\nlastquestion.store`
   );
-}
-
-function buildTelegramCloseMessage(
-  pair: PairConfig,
-  direction: "BUY" | "SELL",
-  hitLevel: string,
-  price: number,
-  decimals: number,
-  entry: number
-) {
-  // Compact style (2026-07-20, per owner's exact reference example) — no divider
-  // block, just the essential fields.
-  const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  const pipsMoved = Math.round(Math.abs(price - entry) / pair.pipUnit);
-
-  if (hitLevel === "sl") {
-    return `🔴 <b>SL TERKENA — ${pair.label}</b>\n🛑 SL    : ${fmt(price)}\n📉 PIPS  : -${pipsMoved}`;
-  }
-
-  return `✅ <b>${hitLevel.toUpperCase()} TERCAPAI — ${pair.label}</b>\n🎯 ${hitLevel.toUpperCase()} : ${fmt(price)}\n📈 PIPS : ${pipsMoved}\n💵 PROFIT : +${pipsMoved} pips`;
-}
-
-function buildTPProgressMessage(pair: PairConfig, direction: "BUY" | "SELL", tpLevel: number, price: number, decimals: number, entry: number) {
-  // Intermediate TP hit -- position keeps running toward the next target, so this
-  // does NOT close the signal (unlike buildTelegramCloseMessage, used only for the
-  // final TP / SL / timeout). Owner explicitly asked TP alerts to fire progressively
-  // (TP1, then TP2, then TP3...) instead of the old behavior of closing the whole
-  // signal silently the instant TP1 was touched.
-  const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  const pipsMoved = Math.round(Math.abs(price - entry) / pair.pipUnit);
-  return (
-    `✅ <b>TP${tpLevel} TERCAPAI — ${pair.label}</b>\n🎯 TP${tpLevel} : ${fmt(price)}\n📈 PROFIT : +${pipsMoved} pips\n\n` +
-    `💡 Posisi masih berjalan menuju TP${tpLevel + 1}. Amankan sebagian profit / sesuaikan SL.`
-  );
-}
-
-function buildBEMessage(pair: PairConfig, threshold: number, pipsRunning: number, decimals: number) {
-  const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: decimals });
-  return `🔐 <b>AMANKAN POSISI — SET BE</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 RUNNING  : ${fmt(pipsRunning)} ${pair.pipLabelSuffix}\n🎯 TRIGGER  : ${threshold} ${pair.pipLabelSuffix}\n\n✅ Posisi sudah masuk area aman.\nGeser SL ke entry (Break Even) untuk mengunci modal.`;
 }
 
 function buildTimeoutMessage(minutes: number) {
@@ -233,30 +186,23 @@ async function monitorOneSignal(
   const dir = active.direction as "BUY" | "SELL";
   const tps: number[] = [active.take_profit, active.tp2, active.tp3, active.tp4].filter((v) => v !== null && v !== undefined);
   const sl = active.stop_loss;
-  const kb = signalStatusKeyboard(active.id);
 
   // SL always takes priority and closes immediately, regardless of how many TP
   // levels have already been alerted -- the raw SL price never moves on its own
   // (BE alerts just tell the member to move it manually), so if price round-trips
   // all the way back down/up to it after running through TP1/TP2, that's still a
-  // real stop-out.
+  // real stop-out. Uses the SAME closeViaSl() the admin's manual SL button calls
+  // (lib/signalAlerts.ts) -- automatic and manual can never conflict or double-fire.
   const slHit = dir === "BUY" ? livePrice <= sl : livePrice >= sl;
   if (slHit) {
-    await admin
-      .from("qco2_signals")
-      .update({ status: "sl_hit", hit_level: "sl", closed_at: new Date().toISOString() })
-      .eq("id", active.id);
-
-    await sendSignalAlert(active.audience, buildTelegramCloseMessage(pair, dir, "sl", sl, decimals, active.entry), kb);
+    await closeViaSl(admin, pair, decimals, active);
     return { pair: pair.key, source: active.source, action: "closed", hit_level: "sl", still_active: false };
   }
 
-  // Progressive TP alerts: find the HIGHEST tp index reached this tick, then fire
-  // an alert for every level newly crossed since the last check (tp_alert_level),
-  // one message per level -- so a fast move that jumps straight past TP1 and TP2
-  // in a single tick still gets both alerts, not just the highest one. The signal
-  // stays ACTIVE (still monitored for further TPs / SL) unless the level reached
-  // is the LAST available TP for this signal, which is the only case that closes it.
+  // Progressive TP alerts: find the HIGHEST tp index reached this tick, then hand it
+  // to advanceTp() (same function the admin's manual TP1-4 buttons call) -- it fires
+  // one alert per newly-crossed level since tp_alert_level and only closes the
+  // signal if this is the LAST available TP for it.
   let reachedIdx = -1;
   for (let i = tps.length - 1; i >= 0; i--) {
     const reached = dir === "BUY" ? livePrice >= tps[i] : livePrice <= tps[i];
@@ -269,31 +215,20 @@ async function monitorOneSignal(
   const oldTpLevel: number = active.tp_alert_level || 0;
 
   if (newTpLevel > oldTpLevel) {
-    for (let lvl = oldTpLevel + 1; lvl <= newTpLevel; lvl++) {
-      const isFinal = lvl === tps.length;
-      const price = tps[lvl - 1];
-      if (isFinal) {
-        await sendSignalAlert(active.audience, buildTelegramCloseMessage(pair, dir, `tp${lvl}`, price, decimals, active.entry), kb);
-      } else {
-        await sendSignalAlert(active.audience, buildTPProgressMessage(pair, dir, lvl, price, decimals, active.entry), kb);
-      }
-    }
-
-    if (newTpLevel === tps.length) {
-      await admin
-        .from("qco2_signals")
-        .update({ status: "tp_hit", hit_level: `tp${newTpLevel}`, tp_alert_level: newTpLevel, closed_at: new Date().toISOString() })
-        .eq("id", active.id);
+    const res = await advanceTp(admin, pair, decimals, active, newTpLevel);
+    if (res.status === "fired" && res.closed) {
       return { pair: pair.key, source: active.source, action: "closed", hit_level: `tp${newTpLevel}`, still_active: false };
     }
-
-    await admin.from("qco2_signals").update({ tp_alert_level: newTpLevel }).eq("id", active.id);
+    active.tp_alert_level = newTpLevel; // keep local copy in sync for the BE check below
   }
 
   // Not fully closed -- check the per-pair timeout before BE (XAU=20min, others=60min).
+  // Timeout stays fully automatic (no manual button) -- it's inherently a "nothing
+  // conclusive happened" state, not something an admin would declare on demand.
   const ageMin = (Date.now() - new Date(active.created_at).getTime()) / 60000;
   const timeoutMins = timeoutMinutesFor(pair.key);
   if (ageMin >= timeoutMins) {
+    const kb = signalStatusKeyboard(active.id);
     await admin
       .from("qco2_signals")
       .update({ status: "timeout", hit_level: "timeout", closed_at: new Date().toISOString() })
@@ -303,19 +238,21 @@ async function monitorOneSignal(
     return { pair: pair.key, source: active.source, action: "timeout", age_min: Math.round(ageMin), still_active: false };
   }
 
-  // Check running pips for Break-Even alert thresholds (20 / 50 / 70).
+  // Check running pips for Break-Even alert thresholds (20 / 50 / 70) -- loop calls
+  // the SAME advanceBe() the admin's manual BE button uses, one step at a time,
+  // while the live pips still qualify for the next threshold (handles a fast move
+  // that jumps past 20 AND 50 in a single tick, firing both).
   const pipsRunning =
     dir === "BUY" ? (livePrice - active.entry) / pair.pipUnit : (active.entry - livePrice) / pair.pipUnit;
 
-  let newBeLevel: number = active.be_alert_level || 0;
-  for (const threshold of BE_THRESHOLDS) {
-    if (pipsRunning >= threshold && newBeLevel < threshold) {
-      await sendSignalAlert(active.audience, buildBEMessage(pair, threshold, pipsRunning, decimals), kb);
-      newBeLevel = threshold;
-    }
-  }
-  if (newBeLevel !== (active.be_alert_level || 0)) {
-    await admin.from("qco2_signals").update({ be_alert_level: newBeLevel }).eq("id", active.id);
+  let guard = 0;
+  while (guard++ < BE_THRESHOLDS.length) {
+    const currentLevel: number = active.be_alert_level || 0;
+    const nextThreshold = BE_THRESHOLDS.find((t) => t > currentLevel);
+    if (!nextThreshold || pipsRunning < nextThreshold) break;
+    const res = await advanceBe(admin, pair, decimals, active, livePrice);
+    if (res.status !== "fired") break;
+    active.be_alert_level = res.threshold;
   }
 
   return { pair: pair.key, source: active.source, action: "monitoring", live_price: livePrice, pips_running: Math.round(pipsRunning), still_active: true };

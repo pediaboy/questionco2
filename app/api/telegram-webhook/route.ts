@@ -11,6 +11,7 @@ import {
 import { TELEGRAM_ADMIN_ID, vipChannelId, publicChannelId, SIGNAL_PAIR_OPTIONS, signalStatusKeyboard } from "@/lib/telegramBotConfig";
 import { SIGNAL_PAIRS } from "@/lib/signalPairs";
 import { getLivePriceForPair } from "@/lib/signalEngine";
+import { advanceTp, closeViaSl, advanceBe, decimalsFor } from "@/lib/signalAlerts";
 
 export const dynamic = "force-dynamic";
 
@@ -401,17 +402,73 @@ export async function POST(req: NextRequest) {
     const messageId = cq.message?.message_id;
     const data: string = cq.data || "";
 
-    // Public "Live Status" buttons -- open to ANY subscriber who taps them, not just
-    // the admin. Must be handled before the admin-only gate below.
-    if (data.startsWith("sigstat:")) {
-      const [, kind, signalId] = data.split(":");
-      const text = await buildSigStatusText(admin, kind, signalId);
-      await answerCallbackQuery(cq.id, text.slice(0, 200), true);
+    if (fromId !== TELEGRAM_ADMIN_ID) {
+      await answerCallbackQuery(cq.id, "Khusus admin.");
       return NextResponse.json({ ok: true });
     }
 
-    if (fromId !== TELEGRAM_ADMIN_ID) {
-      await answerCallbackQuery(cq.id, "Khusus admin.");
+    // Admin-only manual signal-alert buttons (owner 2026-07-20: "inline button nya
+    // itu khusus admin, jadi kalo gua pencet langsung ngirim alert ke channel").
+    // TP1-4 / SL fire that exact alert to the channel AND update the signal's real
+    // state via the SAME lib/signalAlerts.ts functions the automatic cron uses --
+    // so manual and automatic can never conflict or double-fire. BE advances one
+    // threshold step per press. LIVE stays a read-only price/pips check.
+    if (data.startsWith("sigact:")) {
+      const [, action, signalId] = data.split(":");
+
+      if (action === "live") {
+        const text = await buildSigStatusText(admin, "live", signalId);
+        await answerCallbackQuery(cq.id, text.slice(0, 200), true);
+        return NextResponse.json({ ok: true });
+      }
+
+      const { data: sig } = await admin.from("qco2_signals").select("*").eq("id", signalId).maybeSingle();
+      if (!sig) {
+        await answerCallbackQuery(cq.id, "Sinyal tidak ditemukan.", true);
+        return NextResponse.json({ ok: true });
+      }
+      const cfg = SIGNAL_PAIRS.find((p) => p.label === sig.pair);
+      if (!cfg) {
+        await answerCallbackQuery(cq.id, "Konfigurasi pair tidak ditemukan.", true);
+        return NextResponse.json({ ok: true });
+      }
+      const decimals = decimalsFor(cfg);
+
+      if (action.startsWith("tp")) {
+        const level = parseInt(action.replace("tp", ""), 10);
+        const res = await advanceTp(admin, cfg, decimals, sig, level);
+        const msg =
+          res.status === "fired"
+            ? `TP${level} alert terkirim ke channel.${res.closed ? " Sinyal ditutup (TP terakhir)." : ""}`
+            : res.status === "already"
+            ? `TP${level} sudah pernah terkirim sebelumnya.`
+            : res.status === "invalid"
+            ? `TP${level} tidak ada di sinyal ini.`
+            : "Sinyal ini sudah closed (SL/TP/timeout lain).";
+        await answerCallbackQuery(cq.id, msg, true);
+        return NextResponse.json({ ok: true });
+      }
+
+      if (action === "sl") {
+        const res = await closeViaSl(admin, cfg, decimals, sig);
+        const msg = res.status === "fired" ? "SL alert terkirim ke channel. Sinyal ditutup." : "Sinyal ini sudah closed sebelumnya.";
+        await answerCallbackQuery(cq.id, msg, true);
+        return NextResponse.json({ ok: true });
+      }
+
+      if (action === "be") {
+        const res = await advanceBe(admin, cfg, decimals, sig);
+        const msg =
+          res.status === "fired"
+            ? `BE alert (level ${res.threshold}) terkirim ke channel.`
+            : res.status === "already"
+            ? "Semua level BE sudah terkirim."
+            : "Sinyal ini sudah closed sebelumnya.";
+        await answerCallbackQuery(cq.id, msg, true);
+        return NextResponse.json({ ok: true });
+      }
+
+      await answerCallbackQuery(cq.id, "Aksi tidak dikenali.");
       return NextResponse.json({ ok: true });
     }
 
