@@ -21,7 +21,7 @@
  * Dark Cyberpunk HUD — Next.js 14 + Tailwind CSS + Framer Motion + lucide-react
  */
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import VipUpgradeModal from "@/components/VipUpgradeModal";
 import { SIGNAL_PAIRS } from "@/lib/signalPairs";
@@ -40,6 +40,7 @@ import {
   Lock,
   Layers,
   Zap,
+  ChevronDown,
 } from "lucide-react";
 
 const C = {
@@ -139,8 +140,11 @@ const TICKER_ASSETS = [
   { key: "PAXGUSDT", label: "XAU" }, // tokenized gold — real market price, XAG has no public WSS
 ] as const;
 
-const DEPTH_SYMBOL = "btcusdt";
+const DEFAULT_FOCUS_SYMBOL = "BTCUSDT"; // default coin for orderbook + running trade tape
 const MAX_TAPE_ROWS = 25;
+// Selectable coins for the Orderbook + Running Trade panels (subset of TICKER_ASSETS
+// that Binance SPOT actually serves depth20/aggTrade for -- all 11 do).
+const FOCUS_SYMBOL_OPTIONS = TICKER_ASSETS;
 
 interface LiveTick {
   price: number;
@@ -165,73 +169,121 @@ interface TapeRow {
 
 type FeedStatus = "connecting" | "online" | "offline";
 
-function useLiveMarketFeed() {
+interface LiveFeedContextValue {
+  tickers: Record<string, LiveTick>;
+  book: BookState | null;
+  tape: TapeRow[];
+  status: FeedStatus;
+  focusSymbol: string;
+  setFocusSymbol: (sym: string) => void;
+}
+
+const LiveFeedContext = React.createContext<LiveFeedContextValue | null>(null);
+
+function useLiveFeed(): LiveFeedContextValue {
+  const ctx = useContext(LiveFeedContext);
+  if (!ctx) throw new Error("useLiveFeed must be used within <LiveMarketFeedProvider>");
+  return ctx;
+}
+
+/* Context Provider — the ONLY place that owns tickers/book/tape/status state.
+ * Components read it via useLiveFeed(); PendingPage itself never touches this
+ * state directly, so a WS tick can never force the whole page (pipeline list,
+ * engine log, charts, signal log) to re-render. Flush is throttled to 5/sec
+ * (was uncapped rAF, up to ~60/sec) -- plenty smooth for numbers ticking, and
+ * a huge cut in React reconciliation work that was causing page-wide lag and
+ * scroll jank on mobile (owner report 2026-07-21). Depth/trade "focus" coin is
+ * switchable WITHOUT reconnecting the whole socket -- tickers keep flowing on
+ * one always-open combined stream, and switching coin just sends a Binance
+ * SUBSCRIBE/UNSUBSCRIBE control message for that coin's depth20+aggTrade. */
+function LiveMarketFeedProvider({ children }: { children: React.ReactNode }) {
   const [tickers, setTickers] = useState<Record<string, LiveTick>>({});
   const [book, setBook] = useState<BookState | null>(null);
   const [tape, setTape] = useState<TapeRow[]>([]);
   const [status, setStatus] = useState<FeedStatus>("connecting");
+  const [focusSymbol, setFocusSymbolState] = useState<string>(DEFAULT_FOCUS_SYMBOL);
 
-  // tick buffers — mutated freely by WS handler, read once per rAF
+  // tick buffers -- mutated freely by WS handler, flushed on a fixed timer
   const tickerBuf = useRef<Record<string, LiveTick>>({});
   const bookBuf = useRef<BookState | null>(null);
   const tapeBuf = useRef<TapeRow[]>([]);
   const lastPriceRef = useRef<number>(0);
   const lastTickPrices = useRef<Record<string, number>>({});
   const dirty = useRef(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const focusSymbolRef = useRef(focusSymbol);
+
+  const setFocusSymbol = useCallback((next: string) => {
+    const prev = focusSymbolRef.current;
+    if (next === prev) return;
+    const prevLower = prev.toLowerCase();
+    const nextLower = next.toLowerCase();
+    focusSymbolRef.current = next;
+    setFocusSymbolState(next);
+    // clear stale book/tape immediately so the old coin's numbers don't linger
+    bookBuf.current = null;
+    tapeBuf.current = [];
+    lastPriceRef.current = 0;
+    setBook(null);
+    setTape([]);
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ method: "UNSUBSCRIBE", params: [`${prevLower}@depth20@100ms`, `${prevLower}@aggTrade`], id: Date.now() }));
+      ws.send(JSON.stringify({ method: "SUBSCRIBE", params: [`${nextLower}@depth20@100ms`, `${nextLower}@aggTrade`], id: Date.now() + 1 }));
+    }
+  }, []);
 
   useEffect(() => {
-    let ws: WebSocket | null = null;
     let retry = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let rafId = 0;
+    let flushTimer: ReturnType<typeof setInterval> | null = null;
     let dead = false;
 
-    /* ---- rAF flush loop: max 1 React commit per frame, no matter tick rate ---- */
+    /* ---- throttled flush: 1 React commit per 200ms max, never per-tick ---- */
     const flush = () => {
-      if (dead) return;
-      if (dirty.current) {
-        dirty.current = false;
-        if (Object.keys(tickerBuf.current).length > 0) {
-          const patch = tickerBuf.current;
-          tickerBuf.current = {};
-          setTickers((prev) => ({ ...prev, ...patch }));
-        }
-        if (bookBuf.current) {
-          const b = bookBuf.current;
-          bookBuf.current = null;
-          setBook(b);
-        }
-        if (tapeBuf.current.length > 0) {
-          const rows = tapeBuf.current;
-          tapeBuf.current = [];
-          setTape((prev) => [...rows, ...prev].slice(0, MAX_TAPE_ROWS));
-        }
+      if (dead || !dirty.current) return;
+      dirty.current = false;
+      if (Object.keys(tickerBuf.current).length > 0) {
+        const patch = tickerBuf.current;
+        tickerBuf.current = {};
+        setTickers((prev) => ({ ...prev, ...patch }));
       }
-      rafId = requestAnimationFrame(flush);
+      if (bookBuf.current) {
+        const b = bookBuf.current;
+        bookBuf.current = null;
+        setBook(b);
+      }
+      if (tapeBuf.current.length > 0) {
+        const rows = tapeBuf.current;
+        tapeBuf.current = [];
+        setTape((prev) => [...rows, ...prev].slice(0, MAX_TAPE_ROWS));
+      }
     };
-    rafId = requestAnimationFrame(flush);
+    flushTimer = setInterval(flush, 200);
 
-    /* ---- single combined stream: 11 tickers + depth20@100ms + aggTrade ---- */
-    const streams = [
-      ...TICKER_ASSETS.map((a) => `${a.key.toLowerCase()}@ticker`),
-      `${DEPTH_SYMBOL}@depth20@100ms`,
-      `${DEPTH_SYMBOL}@aggTrade`,
-    ].join("/");
+    // initial connection only carries the 11 tickers -- depth/trade for the
+    // focus coin is added right after onopen via an explicit SUBSCRIBE message,
+    // so switching coins later never needs a full reconnect.
+    const streams = TICKER_ASSETS.map((a) => `${a.key.toLowerCase()}@ticker`).join("/");
     const url = `wss://data-stream.binance.vision/stream?streams=${streams}`;
 
     const connect = () => {
       if (dead) return;
       setStatus((s) => (s === "online" ? s : "connecting"));
+      let ws: WebSocket;
       try {
         ws = new WebSocket(url);
       } catch {
         schedule();
         return;
       }
+      wsRef.current = ws;
 
       ws.onopen = () => {
         retry = 0;
         setStatus("online");
+        const s = focusSymbolRef.current.toLowerCase();
+        ws.send(JSON.stringify({ method: "SUBSCRIBE", params: [`${s}@depth20@100ms`, `${s}@aggTrade`], id: 1 }));
       };
 
       ws.onmessage = (evt) => {
@@ -260,6 +312,12 @@ function useLiveMarketFeed() {
           dirty.current = true;
           return;
         }
+
+        // depth/trade streams carry the symbol as the stream prefix (e.g.
+        // "ethusdt@depth20@100ms") -- guard against stale in-flight messages
+        // for a coin we already switched away from.
+        const streamSym = stream.split("@")[0];
+        if (streamSym !== focusSymbolRef.current.toLowerCase()) return;
 
         /* -- partial book depth (20 levels @ 100ms) -- */
         if (stream.includes("@depth20")) {
@@ -325,13 +383,18 @@ function useLiveMarketFeed() {
 
     return () => {
       dead = true;
-      cancelAnimationFrame(rafId);
+      if (flushTimer) clearInterval(flushTimer);
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      ws?.close();
+      wsRef.current?.close();
     };
-  }, []);
+  }, []); // mount once -- coin switches go through setFocusSymbol()'s ws.send(), never a reconnect
 
-  return { tickers, book, tape, status };
+  const value = useMemo<LiveFeedContextValue>(
+    () => ({ tickers, book, tape, status, focusSymbol, setFocusSymbol }),
+    [tickers, book, tape, status, focusSymbol, setFocusSymbol]
+  );
+
+  return <LiveFeedContext.Provider value={value}>{children}</LiveFeedContext.Provider>;
 }
 
 /* number formatting helpers for live prices */
@@ -370,7 +433,8 @@ function TickerItem({ label, tick }: { label: string; tick?: LiveTick }) {
   );
 }
 
-function MultiAssetTicker({ tickers, status }: { tickers: Record<string, LiveTick>; status: FeedStatus }) {
+function MultiAssetTicker() {
+  const { tickers, status } = useLiveFeed();
   const row = (
     <>
       {TICKER_ASSETS.map((a) => (
@@ -419,7 +483,59 @@ function MultiAssetTicker({ tickers, status }: { tickers: Record<string, LiveTic
 }
 
 /* -------------------------------------------------------------------------- */
-/*  NEW 2. ORDERBOOK (MARKET DEPTH) — btcusdt@depth20@100ms                   */
+/*  COIN FOCUS PICKER — shared selector driving BOTH Orderbook + Running Trade */
+/* -------------------------------------------------------------------------- */
+
+function CoinFocusPicker({ compact = false }: { compact?: boolean }) {
+  const { focusSymbol, setFocusSymbol } = useLiveFeed();
+  const [open, setOpen] = useState(false);
+  const label = FOCUS_SYMBOL_OPTIONS.find((a) => a.key === focusSymbol)?.label || focusSymbol;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1 border px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-[0.15em] transition-colors"
+        style={{ borderColor: C.gold + "55", color: C.gold, backgroundColor: "rgba(255,215,0,0.06)" }}
+      >
+        {label}
+        <ChevronDown size={10} strokeWidth={2.5} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div
+            className="absolute right-0 z-30 mt-1 grid max-h-64 w-32 grid-cols-2 gap-1 overflow-y-auto border p-1.5"
+            style={{ borderColor: C.iron, backgroundColor: "#0A0E17" }}
+          >
+            {FOCUS_SYMBOL_OPTIONS.map((a) => (
+              <button
+                key={a.key}
+                type="button"
+                onClick={() => {
+                  setFocusSymbol(a.key);
+                  setOpen(false);
+                }}
+                className="border px-1.5 py-1 font-mono text-[9.5px] font-bold tracking-[0.1em] transition-colors"
+                style={{
+                  borderColor: a.key === focusSymbol ? C.gold : C.iron,
+                  color: a.key === focusSymbol ? C.gold : "#94A3B8",
+                  backgroundColor: a.key === focusSymbol ? "rgba(255,215,0,0.08)" : "transparent",
+                }}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  NEW 2. ORDERBOOK (MARKET DEPTH) — focus coin, switchable                  */
 /* -------------------------------------------------------------------------- */
 
 const BOOK_LEVELS = 9; // rows shown per side, keeps panel compact
@@ -440,7 +556,8 @@ function DepthRow({ price, qty, maxQty, side }: { price: number; qty: number; ma
   );
 }
 
-function OrderbookPanel({ book, status }: { book: BookState | null; status: FeedStatus }) {
+function OrderbookPanel() {
+  const { book, status, focusSymbol } = useLiveFeed();
   const asks = (book?.asks || []).slice(0, BOOK_LEVELS).reverse(); // lowest ask nearest to mid
   const bids = (book?.bids || []).slice(0, BOOK_LEVELS);
   const maxQty = Math.max(1e-9, ...asks.map((l) => l[1]), ...bids.map((l) => l[1]));
@@ -450,17 +567,18 @@ function OrderbookPanel({ book, status }: { book: BookState | null; status: Feed
     <Panel size={12} className="h-full">
       <CornerTicks />
       <div className="flex h-full flex-col">
-        <div className="flex items-center gap-2 border-b px-3 py-2" style={{ borderColor: C.iron }}>
+        <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2" style={{ borderColor: C.iron }}>
           <Layers size={13} style={{ color: C.cyan }} strokeWidth={1.6} />
           <span className="font-mono text-[9.5px] font-bold uppercase tracking-[0.25em] text-slate-400">
-            ORDERBOOK <span className="text-slate-600">::</span> <span style={{ color: C.gold }}>BTCUSDT</span>
+            ORDERBOOK
           </span>
+          <CoinFocusPicker />
           <span className="ml-auto font-mono text-[8px] tracking-[0.2em] text-slate-600">D20 @100MS</span>
         </div>
 
         <div className="grid grid-cols-2 border-b px-3 py-1 font-mono text-[8px] tracking-[0.25em] text-slate-600" style={{ borderColor: "rgba(30,41,59,0.5)" }}>
-          <span>PRICE (USDT)</span>
-          <span className="text-right">SIZE (BTC)</span>
+          <span>PRICE ({focusSymbol.replace("USDT", "")}/USDT)</span>
+          <span className="text-right">SIZE</span>
         </div>
 
         {status !== "online" || !book || asks.length === 0 ? (
@@ -508,7 +626,7 @@ function OrderbookPanel({ book, status }: { book: BookState | null; status: Feed
 }
 
 /* -------------------------------------------------------------------------- */
-/*  NEW 3. RUNNING TRADE (TIME & SALES / TAPE) — btcusdt@aggTrade             */
+/*  NEW 3. RUNNING TRADE (TIME & SALES / TAPE) — focus coin, switchable       */
 /* -------------------------------------------------------------------------- */
 
 function fmtTapeTime(ms: number): string {
@@ -517,16 +635,18 @@ function fmtTapeTime(ms: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 
-function RunningTradePanel({ tape, status }: { tape: TapeRow[]; status: FeedStatus }) {
+function RunningTradePanel() {
+  const { tape, status } = useLiveFeed();
   return (
     <Panel size={12} glowColor={C.gold} className="h-full">
       <CornerTicks color={C.gold} />
       <div className="flex h-full flex-col">
-        <div className="flex items-center gap-2 border-b px-3 py-2" style={{ borderColor: C.iron }}>
+        <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2" style={{ borderColor: C.iron }}>
           <Zap size={13} style={{ color: C.gold }} strokeWidth={1.6} />
           <span className="font-mono text-[9.5px] font-bold uppercase tracking-[0.25em] text-slate-400">
-            RUNNING TRADE <span className="text-slate-600">::</span> <span style={{ color: C.gold }}>TAPE</span>
+            RUNNING TRADE
           </span>
+          <CoinFocusPicker />
           <span className="ml-auto flex items-center gap-1.5 font-mono text-[8px] tracking-[0.2em] text-slate-600">
             <motion.span
               className="h-1 w-1"
@@ -1180,9 +1300,6 @@ export default function PendingPage() {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [flash, setFlash] = useState(false);
 
-  // live WSS feed (tickers + orderbook + tape) — independent of the 5s API poll
-  const { tickers, book, tape, status: feedStatus } = useLiveMarketFeed();
-
   useEffect(() => {
     let mounted = true;
     async function load() {
@@ -1207,6 +1324,7 @@ export default function PendingPage() {
   }, []);
 
   return (
+    <LiveMarketFeedProvider>
     <main className="relative min-h-screen w-full px-4 py-8 md:px-8" style={{ backgroundColor: C.bg }}>
       <div className={`mx-auto flex w-full max-w-6xl flex-col gap-5 ${isVip ? "" : "blur-md select-none pointer-events-none"}`}>
         <motion.header initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="flex flex-wrap items-center justify-between gap-3">
@@ -1232,7 +1350,7 @@ export default function PendingPage() {
 
         {/* NEW :: MULTI-ASSET TICKER MARQUEE — 11 assets, real WSS ticks */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.05, duration: 0.5 }}>
-          <MultiAssetTicker tickers={tickers} status={feedStatus} />
+          <MultiAssetTicker />
         </motion.div>
 
         {!data ? (
@@ -1262,11 +1380,11 @@ export default function PendingPage() {
             {/* RIGHT COLUMN — NEW zero-delay market microstructure (sticky on desktop) */}
             <div className="flex min-w-0 flex-col gap-5 xl:sticky xl:top-4">
               <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25, duration: 0.5 }} aria-label="Orderbook Market Depth">
-                <OrderbookPanel book={book} status={feedStatus} />
+                <OrderbookPanel />
               </motion.section>
 
               <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35, duration: 0.5 }} aria-label="Running Trade Tape">
-                <RunningTradePanel tape={tape} status={feedStatus} />
+                <RunningTradePanel />
               </motion.section>
             </div>
           </div>
@@ -1295,5 +1413,6 @@ export default function PendingPage() {
 
       <VipUpgradeModal open={gateOpen} onClose={() => setGateOpen(false)} featureName="AI Engine Terminal" />
     </main>
+    </LiveMarketFeedProvider>
   );
 }
