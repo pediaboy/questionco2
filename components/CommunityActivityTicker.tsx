@@ -74,7 +74,7 @@ export default function CommunityActivityTicker() {
     // stagger the "new trade" ticks a bit (2-3.5s) so it doesn't feel mechanically uniform
     let tradeTimer: ReturnType<typeof setTimeout>;
     const scheduleNext = () => {
-      const delay = 2000 + Math.random() * 1500;
+      const delay = 500 + Math.random() * 700; // faster running-trade feel per owner request
       tradeTimer = setTimeout(async () => {
         await pushOne();
         scheduleNext();

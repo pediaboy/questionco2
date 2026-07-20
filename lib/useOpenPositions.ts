@@ -11,6 +11,9 @@ export interface OpenPositionItem {
   lot_size: number;
   price: number;
   created_at: string;
+  status: "RUNNING" | "BE_HIT" | "SL_HIT";
+  pips: number | null;
+  live_price: number | null;
 }
 
 const fetcher = async (url: string): Promise<OpenPositionItem[]> => {
@@ -24,8 +27,11 @@ const fetcher = async (url: string): Promise<OpenPositionItem[]> => {
 };
 
 export function useOpenPositions() {
+  // Server recomputes each entry's SL/BE status against REAL live market price on
+  // every hit -- 2s keeps it feeling "per-second live" without hammering the
+  // upstream OKX/TradingView feeds harder than the rest of the site already does.
   const { data: items, error, mutate } = useSWR<OpenPositionItem[]>("/api/member/open-positions", fetcher, {
-    refreshInterval: 5000,
+    refreshInterval: 2000,
     revalidateOnFocus: false,
     onSuccess: () => {
       syncEmitter.emit();
