@@ -8,7 +8,7 @@ import {
   sendToChannel,
   InlineKeyboard,
 } from "@/lib/telegramApi";
-import { TELEGRAM_ADMIN_ID, vipChannelId, publicChannelId, SIGNAL_PAIR_OPTIONS } from "@/lib/telegramBotConfig";
+import { TELEGRAM_ADMIN_ID, vipChannelId, publicChannelId, SIGNAL_PAIR_OPTIONS, signalStatusKeyboard } from "@/lib/telegramBotConfig";
 import { SIGNAL_PAIRS } from "@/lib/signalPairs";
 import { getLivePriceForPair } from "@/lib/signalEngine";
 
@@ -49,16 +49,6 @@ const CANCEL_BTN = { text: "❌ Batal", callback_data: "cancel" };
 // show_alert) computed from the live price at the exact moment of the tap, never
 // a cache. Kept intentionally short (Telegram's alert popup is capped at 200 chars),
 // split into 3 focused buttons instead of one wall of text. ----------
-
-function signalStatusKeyboard(signalId: string): InlineKeyboard {
-  return [
-    [
-      { text: "🎯 TARGET", callback_data: `sigstat:target:${signalId}` },
-      { text: "⚖️ BE", callback_data: `sigstat:be:${signalId}` },
-      { text: "📊 LIVE", callback_data: `sigstat:live:${signalId}` },
-    ],
-  ];
-}
 
 function fmtPrice(n: number, decimals: number) {
   return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });

@@ -7,14 +7,14 @@ import { isNewsBlackout } from "@/lib/newsFilter";
 import { getActiveSessions } from "@/lib/marketSessions";
 import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
 import { sendToChannel, InlineKeyboard } from "@/lib/telegramApi";
-import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
+import { vipChannelId, publicChannelId, signalStatusKeyboard } from "@/lib/telegramBotConfig";
 
 // Any signal (auto OR manual) is monitored the same way -- alerts always go to the
 // VIP channel, and ALSO to the public channel when the signal's audience is public.
 // This mirrors the exact routing the manual-signal creation flow already uses.
-async function sendSignalAlert(audience: string | null | undefined, text: string) {
-  await sendToChannel(vipChannelId(), text);
-  if (audience === "public") await sendToChannel(publicChannelId(), text);
+async function sendSignalAlert(audience: string | null | undefined, text: string, keyboard?: InlineKeyboard) {
+  await sendToChannel(vipChannelId(), text, keyboard);
+  if (audience === "public") await sendToChannel(publicChannelId(), text, keyboard);
 }
 
 export const dynamic = "force-dynamic";
@@ -109,6 +109,20 @@ function buildTelegramCloseMessage(
   }
 
   return `✅ <b>${hitLevel.toUpperCase()} TERCAPAI — ${pair.label}</b>\n🎯 ${hitLevel.toUpperCase()} : ${fmt(price)}\n📈 PIPS : ${pipsMoved}\n💵 PROFIT : +${pipsMoved} pips`;
+}
+
+function buildTPProgressMessage(pair: PairConfig, direction: "BUY" | "SELL", tpLevel: number, price: number, decimals: number, entry: number) {
+  // Intermediate TP hit -- position keeps running toward the next target, so this
+  // does NOT close the signal (unlike buildTelegramCloseMessage, used only for the
+  // final TP / SL / timeout). Owner explicitly asked TP alerts to fire progressively
+  // (TP1, then TP2, then TP3...) instead of the old behavior of closing the whole
+  // signal silently the instant TP1 was touched.
+  const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  const pipsMoved = Math.round(Math.abs(price - entry) / pair.pipUnit);
+  return (
+    `✅ <b>TP${tpLevel} TERCAPAI — ${pair.label}</b>\n🎯 TP${tpLevel} : ${fmt(price)}\n📈 PROFIT : +${pipsMoved} pips\n\n` +
+    `💡 Posisi masih berjalan menuju TP${tpLevel + 1}. Amankan sebagian profit / sesuaikan SL.`
+  );
 }
 
 function buildBEMessage(pair: PairConfig, threshold: number, pipsRunning: number, decimals: number) {
@@ -219,43 +233,64 @@ async function monitorOneSignal(
   const dir = active.direction as "BUY" | "SELL";
   const tps: number[] = [active.take_profit, active.tp2, active.tp3, active.tp4].filter((v) => v !== null && v !== undefined);
   const sl = active.stop_loss;
+  const kb = signalStatusKeyboard(active.id);
 
-  let hit: { level: string; price: number } | null = null;
-
-  if (dir === "BUY") {
-    if (livePrice <= sl) hit = { level: "sl", price: sl };
-    else {
-      for (let i = tps.length - 1; i >= 0; i--) {
-        if (livePrice >= tps[i]) {
-          hit = { level: `tp${i + 1}`, price: tps[i] };
-          break;
-        }
-      }
-    }
-  } else {
-    if (livePrice >= sl) hit = { level: "sl", price: sl };
-    else {
-      for (let i = tps.length - 1; i >= 0; i--) {
-        if (livePrice <= tps[i]) {
-          hit = { level: `tp${i + 1}`, price: tps[i] };
-          break;
-        }
-      }
-    }
-  }
-
-  if (hit) {
-    const status = hit.level === "sl" ? "sl_hit" : "tp_hit";
+  // SL always takes priority and closes immediately, regardless of how many TP
+  // levels have already been alerted -- the raw SL price never moves on its own
+  // (BE alerts just tell the member to move it manually), so if price round-trips
+  // all the way back down/up to it after running through TP1/TP2, that's still a
+  // real stop-out.
+  const slHit = dir === "BUY" ? livePrice <= sl : livePrice >= sl;
+  if (slHit) {
     await admin
       .from("qco2_signals")
-      .update({ status, hit_level: hit.level, closed_at: new Date().toISOString() })
+      .update({ status: "sl_hit", hit_level: "sl", closed_at: new Date().toISOString() })
       .eq("id", active.id);
 
-    await sendSignalAlert(active.audience, buildTelegramCloseMessage(pair, dir, hit.level, hit.price, decimals, active.entry));
-    return { pair: pair.key, source: active.source, action: "closed", hit_level: hit.level, still_active: false };
+    await sendSignalAlert(active.audience, buildTelegramCloseMessage(pair, dir, "sl", sl, decimals, active.entry), kb);
+    return { pair: pair.key, source: active.source, action: "closed", hit_level: "sl", still_active: false };
   }
 
-  // Not hit yet — check the per-pair timeout before anything else (XAU=20min, others=60min).
+  // Progressive TP alerts: find the HIGHEST tp index reached this tick, then fire
+  // an alert for every level newly crossed since the last check (tp_alert_level),
+  // one message per level -- so a fast move that jumps straight past TP1 and TP2
+  // in a single tick still gets both alerts, not just the highest one. The signal
+  // stays ACTIVE (still monitored for further TPs / SL) unless the level reached
+  // is the LAST available TP for this signal, which is the only case that closes it.
+  let reachedIdx = -1;
+  for (let i = tps.length - 1; i >= 0; i--) {
+    const reached = dir === "BUY" ? livePrice >= tps[i] : livePrice <= tps[i];
+    if (reached) {
+      reachedIdx = i;
+      break;
+    }
+  }
+  const newTpLevel = reachedIdx + 1; // 1-based count of TP levels reached so far
+  const oldTpLevel: number = active.tp_alert_level || 0;
+
+  if (newTpLevel > oldTpLevel) {
+    for (let lvl = oldTpLevel + 1; lvl <= newTpLevel; lvl++) {
+      const isFinal = lvl === tps.length;
+      const price = tps[lvl - 1];
+      if (isFinal) {
+        await sendSignalAlert(active.audience, buildTelegramCloseMessage(pair, dir, `tp${lvl}`, price, decimals, active.entry), kb);
+      } else {
+        await sendSignalAlert(active.audience, buildTPProgressMessage(pair, dir, lvl, price, decimals, active.entry), kb);
+      }
+    }
+
+    if (newTpLevel === tps.length) {
+      await admin
+        .from("qco2_signals")
+        .update({ status: "tp_hit", hit_level: `tp${newTpLevel}`, tp_alert_level: newTpLevel, closed_at: new Date().toISOString() })
+        .eq("id", active.id);
+      return { pair: pair.key, source: active.source, action: "closed", hit_level: `tp${newTpLevel}`, still_active: false };
+    }
+
+    await admin.from("qco2_signals").update({ tp_alert_level: newTpLevel }).eq("id", active.id);
+  }
+
+  // Not fully closed -- check the per-pair timeout before BE (XAU=20min, others=60min).
   const ageMin = (Date.now() - new Date(active.created_at).getTime()) / 60000;
   const timeoutMins = timeoutMinutesFor(pair.key);
   if (ageMin >= timeoutMins) {
@@ -264,23 +299,23 @@ async function monitorOneSignal(
       .update({ status: "timeout", hit_level: "timeout", closed_at: new Date().toISOString() })
       .eq("id", active.id);
 
-    await sendSignalAlert(active.audience, buildTimeoutMessage(timeoutMins));
+    await sendSignalAlert(active.audience, buildTimeoutMessage(timeoutMins), kb);
     return { pair: pair.key, source: active.source, action: "timeout", age_min: Math.round(ageMin), still_active: false };
   }
 
-  // Check running pips for Break-Even alert thresholds (30 / 50 / 70).
+  // Check running pips for Break-Even alert thresholds (20 / 50 / 70).
   const pipsRunning =
     dir === "BUY" ? (livePrice - active.entry) / pair.pipUnit : (active.entry - livePrice) / pair.pipUnit;
 
-  let newLevel: number = active.be_alert_level || 0;
+  let newBeLevel: number = active.be_alert_level || 0;
   for (const threshold of BE_THRESHOLDS) {
-    if (pipsRunning >= threshold && newLevel < threshold) {
-      await sendSignalAlert(active.audience, buildBEMessage(pair, threshold, pipsRunning, decimals));
-      newLevel = threshold;
+    if (pipsRunning >= threshold && newBeLevel < threshold) {
+      await sendSignalAlert(active.audience, buildBEMessage(pair, threshold, pipsRunning, decimals), kb);
+      newBeLevel = threshold;
     }
   }
-  if (newLevel !== (active.be_alert_level || 0)) {
-    await admin.from("qco2_signals").update({ be_alert_level: newLevel }).eq("id", active.id);
+  if (newBeLevel !== (active.be_alert_level || 0)) {
+    await admin.from("qco2_signals").update({ be_alert_level: newBeLevel }).eq("id", active.id);
   }
 
   return { pair: pair.key, source: active.source, action: "monitoring", live_price: livePrice, pips_running: Math.round(pipsRunning), still_active: true };
@@ -454,14 +489,7 @@ async function processPair(
   if (error) return { pair: pair.key, action: "error", error: error.message };
 
   const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, "none", result.confidence, result.reasoning, []);
-  const statusKeyboard: InlineKeyboard = [
-    [
-      { text: "\ud83c\udfaf TARGET", callback_data: `sigstat:target:${created.id}` },
-      { text: "\u2696\ufe0f BE", callback_data: `sigstat:be:${created.id}` },
-      { text: "\ud83d\udcca LIVE", callback_data: `sigstat:live:${created.id}` },
-    ],
-  ];
-  await sendToChannel(vipChannelId(), message, statusKeyboard);
+  await sendToChannel(vipChannelId(), message, signalStatusKeyboard(created.id));
   await fanOutAlerts(admin, created.id, pair.label, result.direction, result.confidence, message.replace(/<[^>]+>/g, "")).catch(() => null);
 
   return {
