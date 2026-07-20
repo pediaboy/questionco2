@@ -214,6 +214,44 @@ function momentumBreakout(m1: Candle[], pipUnit: number, pipsThreshold = 25, loo
   return { direction: movedPips > 0 ? "BUY" : "SELL", pipsMoved: Math.abs(movedPips) };
 }
 
+// Real Support/Resistance zone detection (added 2026-07-20, owner: "kalo harga dah
+// tinggi liatin area resis dan support nya" -- when price has already run, check
+// nearby resistance/support before firing so an extended BUY into resistance or an
+// extended SELL into support gets flagged rather than blindly chased). Uses a
+// 5-bar fractal (2 candles either side) over the M5 window to find real swing
+// highs/lows, then clusters nearby levels (within `clusterPips`) into zones so
+// repeated touches count as one stronger level.
+interface SRZone { price: number; touches: number }
+
+function detectSRZones(m5: Candle[], pipUnit: number, fractalWidth = 2, clusterPips = 8): SRZone[] {
+  const raw: number[] = [];
+  for (let i = fractalWidth; i < m5.length - fractalWidth; i++) {
+    const window = m5.slice(i - fractalWidth, i + fractalWidth + 1);
+    const isHigh = m5[i].high === Math.max(...window.map((c) => c.high));
+    const isLow = m5[i].low === Math.min(...window.map((c) => c.low));
+    if (isHigh) raw.push(m5[i].high);
+    if (isLow) raw.push(m5[i].low);
+  }
+  const clusterDist = clusterPips * pipUnit;
+  const zones: SRZone[] = [];
+  for (const p of raw.slice().sort((a, b) => a - b)) {
+    const existing = zones.find((z) => Math.abs(z.price - p) <= clusterDist);
+    if (existing) {
+      existing.price = (existing.price * existing.touches + p) / (existing.touches + 1);
+      existing.touches += 1;
+    } else {
+      zones.push({ price: p, touches: 1 });
+    }
+  }
+  return zones;
+}
+
+function nearestSR(zones: SRZone[], currentPrice: number): { resistance: number | null; support: number | null } {
+  const above = zones.filter((z) => z.price > currentPrice).sort((a, b) => a.price - b.price);
+  const below = zones.filter((z) => z.price < currentPrice).sort((a, b) => b.price - a.price);
+  return { resistance: above[0]?.price ?? null, support: below[0]?.price ?? null };
+}
+
 export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], newsBlackout: boolean, pipUnit: number = 0.1): XauAggressiveResult {
   const checklist: { label: string; pass: boolean }[] = [];
 
@@ -372,12 +410,52 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
   const bandTouch = direction === "SELL" ? closes[last] >= upperBand : closes[last] <= lowerBand;
   checklist.push({ label: "ATR Band (x1.0) Rejection Zone", pass: bandTouch });
 
+  // Support/Resistance check -- penalize chasing INTO a nearby zone (extended,
+  // higher rejection risk), reward a bounce/reject FROM a nearby zone in the
+  // trade's favor. Not a hard gate -- a confidence adjustment, so a genuinely
+  // strong setup can still fire even right at a level, just flagged clearly.
+  const srZones = detectSRZones(m5, pipUnit);
+  const { resistance, support } = nearestSR(srZones, closes[last]);
+  const srNearPips = 15;
+  let srAdjust = 0;
+  let srNote = "";
+  if (direction === "BUY" && resistance !== null) {
+    const distPips = (resistance - closes[last]) / pipUnit;
+    if (distPips <= srNearPips) {
+      srAdjust -= 15;
+      srNote = `mendekati resistance ${resistance.toFixed(2)} (${Math.round(distPips)} pips lagi) — waspada rejection`;
+    }
+  }
+  if (direction === "BUY" && support !== null) {
+    const distPips = (closes[last] - support) / pipUnit;
+    if (distPips <= srNearPips) {
+      srAdjust += 10;
+      srNote = srNote ? `${srNote}; mantul dari support ${support.toFixed(2)}` : `mantul dari support ${support.toFixed(2)} (${Math.round(distPips)} pips)`;
+    }
+  }
+  if (direction === "SELL" && support !== null) {
+    const distPips = (closes[last] - support) / pipUnit;
+    if (distPips <= srNearPips) {
+      srAdjust -= 15;
+      srNote = `mendekati support ${support.toFixed(2)} (${Math.round(distPips)} pips lagi) — waspada rejection`;
+    }
+  }
+  if (direction === "SELL" && resistance !== null) {
+    const distPips = (resistance - closes[last]) / pipUnit;
+    if (distPips <= srNearPips) {
+      srAdjust += 10;
+      srNote = srNote ? `${srNote}; reject dari resistance ${resistance.toFixed(2)}` : `reject dari resistance ${resistance.toFixed(2)} (${Math.round(distPips)} pips)`;
+    }
+  }
+  checklist.push({ label: "Support/Resistance Zone", pass: srAdjust >= 0 });
+
   const confirmCount = [emaConfirms, stochConfirms, sweepConfirms].filter(Boolean).length;
   let confidence = triggerSource === "momentum" ? 68 : 62; // momentum trigger = already-realized move, slightly higher base
   if (confirmCount >= 2) confidence += 15; // 2+ of 3 confirmations aligned
   if (volumeSpike) confidence += 13;
   if (bandTouch) confidence += 10;
-  confidence = Math.min(95, confidence);
+  confidence += srAdjust;
+  confidence = Math.max(0, Math.min(95, confidence));
 
   const parts =
     triggerSource === "momentum"
@@ -388,6 +466,7 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
   if (sweepConfirms) parts.push("Liquidity Sweep M3 confirm");
   if (volumeSpike) parts.push("volume spike 2x");
   if (bandTouch) parts.push("ATR band rejection");
+  if (srNote) parts.push(`S/R: ${srNote}`);
 
   return {
     direction,
