@@ -141,6 +141,7 @@ function mainMenuView(): { text: string; kb: InlineKeyboard } {
       "🎛 <b>LASTQUESTION.CO — ADMIN PANEL</b>\n━━━━━━━━━━━━━━━━\n\nSemua aksi di sini langsung sinkron ke web &amp; channel Telegram.\n\nPilih menu:",
     kb: [
       [{ text: "📊 Sinyal Manual", callback_data: "menu:signal" }],
+      [{ text: "🎮 Kontrol Sinyal Aktif", callback_data: "menu:activesignals" }],
       [{ text: "👥 Member VIP", callback_data: "menu:vip" }],
       [{ text: "🧾 Invoice Masuk", callback_data: "menu:invoice" }],
       [{ text: "📈 Statistik Global", callback_data: "menu:globalstats" }],
@@ -150,6 +151,46 @@ function mainMenuView(): { text: string; kb: InlineKeyboard } {
       [{ text: "❌ Tutup Panel", callback_data: "menu:close" }],
     ],
   };
+}
+
+// ---------- manual signal-alert control (admin panel ONLY -- these buttons never
+// appear on the public/VIP channel posts, owner 2026-07-20: "button inline nya itu
+// buat di admin panel doang, dipublik ga ada, karna itu button khusus buat ngirim
+// alert"). Admin picks an active signal here, then TP1-4/SL/BE fire the real alert
+// to the channel (plain text, no buttons) via the shared lib/signalAlerts.ts logic
+// -- the exact same code path the automatic cron monitor uses, so manual and
+// automatic stay in sync. ----------
+
+function activeSignalsListView(rows: Record<string, any>[]): { text: string; kb: InlineKeyboard } {
+  if (!rows.length) {
+    return {
+      text: "🎮 <b>KONTROL SINYAL AKTIF</b>\n━━━━━━━━━━━━━━━━\n\nTidak ada sinyal aktif saat ini.",
+      kb: [[BACK_BTN]],
+    };
+  }
+  const kb: InlineKeyboard = rows.map((r) => [
+    { text: `${r.pair} ${r.direction} — TP${r.tp_alert_level || 0}/${[r.take_profit, r.tp2, r.tp3, r.tp4].filter((v) => v != null).length}`, callback_data: `sigpick:${r.id}` },
+  ]);
+  kb.push([BACK_BTN]);
+  return { text: "🎮 <b>KONTROL SINYAL AKTIF</b>\n━━━━━━━━━━━━━━━━\n\nPilih sinyal untuk kirim alert manual ke channel:", kb };
+}
+
+function signalDetailView(sig: Record<string, any>, cfg?: { pipUnit: number }): { text: string; kb: InlineKeyboard } {
+  const decimals = cfg ? (cfg.pipUnit < 1 ? 2 : 0) : sig.pip_unit && sig.pip_unit < 1 ? 2 : 0;
+  const fmt = (n: number) => n?.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  const tps: number[] = [sig.take_profit, sig.tp2, sig.tp3, sig.tp4].filter((v) => v !== null && v !== undefined);
+  const tpAlertLevel: number = sig.tp_alert_level || 0;
+  const tpLines = tps.map((tp, i) => `TP${i + 1}: ${fmt(tp)} ${i + 1 <= tpAlertLevel ? "✅" : ""}`).join("\n");
+  const statusLabel: Record<string, string> = { active: "AKTIF", tp_hit: "TP HIT (closed)", sl_hit: "SL HIT (closed)", timeout: "TIMEOUT (closed)" };
+
+  const text =
+    `🎮 <b>KONTROL SINYAL — ${sig.pair} ${sig.direction}</b>\n━━━━━━━━━━━━━━━━\n\n` +
+    `Status: ${statusLabel[sig.status] || sig.status}\nEntry: ${fmt(sig.entry)}\nSL: ${fmt(sig.stop_loss)}\n${tpLines}\nBE level: ${sig.be_alert_level || 0} pips\n\n` +
+    (sig.status === "active" ? "Tekan tombol untuk kirim alert manual ke channel:" : "Sinyal ini sudah closed, tidak bisa dikirim alert lagi.");
+
+  const kb: InlineKeyboard = sig.status === "active" ? [...signalStatusKeyboard(sig.id), [{ text: "🔙 Daftar Sinyal Aktif", callback_data: "menu:activesignals" }]] : [[{ text: "🔙 Daftar Sinyal Aktif", callback_data: "menu:activesignals" }]];
+
+  return { text, kb };
 }
 
 // ---------- signal wizard views ----------
@@ -434,10 +475,12 @@ export async function POST(req: NextRequest) {
       }
       const decimals = decimalsFor(cfg);
 
+      let msg = "Aksi tidak dikenali.";
+
       if (action.startsWith("tp")) {
         const level = parseInt(action.replace("tp", ""), 10);
         const res = await advanceTp(admin, cfg, decimals, sig, level);
-        const msg =
+        msg =
           res.status === "fired"
             ? `TP${level} alert terkirim ke channel.${res.closed ? " Sinyal ditutup (TP terakhir)." : ""}`
             : res.status === "already"
@@ -445,30 +488,30 @@ export async function POST(req: NextRequest) {
             : res.status === "invalid"
             ? `TP${level} tidak ada di sinyal ini.`
             : "Sinyal ini sudah closed (SL/TP/timeout lain).";
-        await answerCallbackQuery(cq.id, msg, true);
-        return NextResponse.json({ ok: true });
-      }
-
-      if (action === "sl") {
+      } else if (action === "sl") {
         const res = await closeViaSl(admin, cfg, decimals, sig);
-        const msg = res.status === "fired" ? "SL alert terkirim ke channel. Sinyal ditutup." : "Sinyal ini sudah closed sebelumnya.";
-        await answerCallbackQuery(cq.id, msg, true);
-        return NextResponse.json({ ok: true });
-      }
-
-      if (action === "be") {
+        msg = res.status === "fired" ? "SL alert terkirim ke channel. Sinyal ditutup." : "Sinyal ini sudah closed sebelumnya.";
+      } else if (action === "be") {
         const res = await advanceBe(admin, cfg, decimals, sig);
-        const msg =
+        msg =
           res.status === "fired"
             ? `BE alert (level ${res.threshold}) terkirim ke channel.`
             : res.status === "already"
             ? "Semua level BE sudah terkirim."
             : "Sinyal ini sudah closed sebelumnya.";
-        await answerCallbackQuery(cq.id, msg, true);
-        return NextResponse.json({ ok: true });
       }
 
-      await answerCallbackQuery(cq.id, "Aksi tidak dikenali.");
+      await answerCallbackQuery(cq.id, msg, true);
+
+      // Refresh the admin panel view in-place so the detail screen reflects the
+      // just-fired action (updated tp_alert_level/be_alert_level/status) instead of
+      // going stale until the admin manually re-opens it.
+      const { data: freshSig } = await admin.from("qco2_signals").select("*").eq("id", signalId).maybeSingle();
+      if (freshSig && chatId && messageId) {
+        const v = signalDetailView(freshSig, cfg);
+        await editMessageText(chatId, messageId, v.text, v.kb);
+      }
+      return NextResponse.json({ ok: true });
       return NextResponse.json({ ok: true });
     }
 
@@ -497,6 +540,22 @@ export async function POST(req: NextRequest) {
       session.data = {};
       const v = broadcastTitlePromptView();
       await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data === "menu:activesignals") {
+      session.state = "idle";
+      session.data = {};
+      const { data: rows } = await admin.from("qco2_signals").select("*").eq("status", "active").order("created_at", { ascending: false }).limit(15);
+      const v = activeSignalsListView(rows || []);
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data.startsWith("sigpick:")) {
+      const id = data.split(":")[1];
+      const { data: sig } = await admin.from("qco2_signals").select("*").eq("id", id).maybeSingle();
+      if (!sig) {
+        await editMessageText(chatId, messageId, "❌ Sinyal tidak ditemukan.", [[{ text: "🔙 Daftar Sinyal Aktif", callback_data: "menu:activesignals" }]]);
+      } else {
+        const cfg = SIGNAL_PAIRS.find((p) => p.label === sig.pair);
+        const v = signalDetailView(sig, cfg);
+        await editMessageText(chatId, messageId, v.text, v.kb);
+      }
     } else if (data === "menu:vip") {
       session.state = "idle";
       session.data = {};
@@ -665,9 +724,8 @@ export async function POST(req: NextRequest) {
         await editMessageText(chatId, messageId, `❌ Gagal simpan sinyal: ${error.message}`, [[BACK_BTN]]);
       } else {
         const msg = buildSignalMessage(d.pair, d.direction, d.entry, d.sl, tps);
-        const kb = signalStatusKeyboard(createdSig.id);
-        await sendToChannel(vipChannelId(), msg, kb);
-        if (d.audience === "public") await sendToChannel(publicChannelId(), msg, kb);
+        await sendToChannel(vipChannelId(), msg);
+        if (d.audience === "public") await sendToChannel(publicChannelId(), msg);
         await editMessageText(chatId, messageId, `✅ <b>Sinyal berhasil dikirim!</b>\n\nSudah tayang di web dan channel Telegram.`, [[BACK_BTN]]);
       }
       session.state = "idle";

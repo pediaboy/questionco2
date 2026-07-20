@@ -8,7 +8,7 @@
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { PairConfig } from "@/lib/signalPairs";
 import { sendToChannel, InlineKeyboard } from "@/lib/telegramApi";
-import { vipChannelId, publicChannelId, signalStatusKeyboard } from "@/lib/telegramBotConfig";
+import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
 import { getLivePriceForPair } from "@/lib/signalEngine";
 
 export const BE_THRESHOLDS = [20, 50, 70]; // first level lowered 30->20 per owner request 2026-07-20
@@ -77,15 +77,14 @@ export async function advanceTp(
   if (targetLevel <= oldLevel) return { status: "already" };
 
   const dir = signal.direction as "BUY" | "SELL";
-  const kb = signalStatusKeyboard(signal.id);
 
   for (let lvl = oldLevel + 1; lvl <= targetLevel; lvl++) {
     const isFinal = lvl === tps.length;
     const price = tps[lvl - 1];
     if (isFinal) {
-      await sendSignalAlert(signal.audience, buildTelegramCloseMessage(pair, dir, `tp${lvl}`, price, decimals, signal.entry), kb);
+      await sendSignalAlert(signal.audience, buildTelegramCloseMessage(pair, dir, `tp${lvl}`, price, decimals, signal.entry));
     } else {
-      await sendSignalAlert(signal.audience, buildTPProgressMessage(pair, dir, lvl, price, decimals, signal.entry), kb);
+      await sendSignalAlert(signal.audience, buildTPProgressMessage(pair, dir, lvl, price, decimals, signal.entry));
     }
   }
 
@@ -111,12 +110,11 @@ export async function closeViaSl(
   signal: Record<string, any>
 ): Promise<{ status: "fired" | "closed_other" }> {
   if (signal.status !== "active") return { status: "closed_other" };
-  const kb = signalStatusKeyboard(signal.id);
   await admin
     .from("qco2_signals")
     .update({ status: "sl_hit", hit_level: "sl", closed_at: new Date().toISOString() })
     .eq("id", signal.id);
-  await sendSignalAlert(signal.audience, buildTelegramCloseMessage(pair, signal.direction, "sl", signal.stop_loss, decimals, signal.entry), kb);
+  await sendSignalAlert(signal.audience, buildTelegramCloseMessage(pair, signal.direction, "sl", signal.stop_loss, decimals, signal.entry));
   return { status: "fired" };
 }
 
@@ -141,8 +139,7 @@ export async function advanceBe(
   const livePrice = livePriceHint ?? (await getLivePriceForPair(pair.key, pair.dataInstId));
   const pipsRunning = signal.direction === "BUY" ? (livePrice - signal.entry) / pair.pipUnit : (signal.entry - livePrice) / pair.pipUnit;
 
-  const kb = signalStatusKeyboard(signal.id);
-  await sendSignalAlert(signal.audience, buildBEMessage(pair, nextThreshold, pipsRunning, decimals), kb);
+  await sendSignalAlert(signal.audience, buildBEMessage(pair, nextThreshold, pipsRunning, decimals));
   await admin.from("qco2_signals").update({ be_alert_level: nextThreshold }).eq("id", signal.id);
   return { status: "fired", threshold: nextThreshold };
 }

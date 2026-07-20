@@ -7,7 +7,7 @@ import { isNewsBlackout } from "@/lib/newsFilter";
 import { getActiveSessions } from "@/lib/marketSessions";
 import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
 import { sendToChannel } from "@/lib/telegramApi";
-import { vipChannelId, publicChannelId, signalStatusKeyboard } from "@/lib/telegramBotConfig";
+import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
 import { sendSignalAlert, advanceTp, closeViaSl, advanceBe, BE_THRESHOLDS } from "@/lib/signalAlerts";
 
 export const dynamic = "force-dynamic";
@@ -228,13 +228,12 @@ async function monitorOneSignal(
   const ageMin = (Date.now() - new Date(active.created_at).getTime()) / 60000;
   const timeoutMins = timeoutMinutesFor(pair.key);
   if (ageMin >= timeoutMins) {
-    const kb = signalStatusKeyboard(active.id);
     await admin
       .from("qco2_signals")
       .update({ status: "timeout", hit_level: "timeout", closed_at: new Date().toISOString() })
       .eq("id", active.id);
 
-    await sendSignalAlert(active.audience, buildTimeoutMessage(timeoutMins), kb);
+    await sendSignalAlert(active.audience, buildTimeoutMessage(timeoutMins));
     return { pair: pair.key, source: active.source, action: "timeout", age_min: Math.round(ageMin), still_active: false };
   }
 
@@ -426,7 +425,7 @@ async function processPair(
   if (error) return { pair: pair.key, action: "error", error: error.message };
 
   const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, "none", result.confidence, result.reasoning, []);
-  await sendToChannel(vipChannelId(), message, signalStatusKeyboard(created.id));
+  await sendToChannel(vipChannelId(), message);
   await fanOutAlerts(admin, created.id, pair.label, result.direction, result.confidence, message.replace(/<[^>]+>/g, "")).catch(() => null);
 
   return {
