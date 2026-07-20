@@ -1,8 +1,8 @@
 {
-  "name": "LASTQUESTION.CO — Master The Market",
+  "name": "LASTQUESTION.CO \u2014 Master The Market",
   "short_name": "LASTQUESTION.CO",
   "description": "Crypto, forex & market intelligence ecosystem. Analytics, signals, community.",
-  "start_url": "/",
+  "start_url": "/dashboard",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
