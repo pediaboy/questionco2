@@ -1,0 +1,21 @@
+name: Fast Signal Ping
+
+# Base44's own workflow scheduler has a hard 5-minute-minimum floor. This GitHub
+# Actions job supplements it by hitting the same cron endpoint more often, so the
+# auto-signal engine effectively gets evaluated closer to every ~2 minutes instead
+# of only every 5. The endpoint is idempotent-safe (checks active-signal/cooldown
+# state before firing), so overlapping ticks from both schedulers are harmless.
+on:
+  schedule:
+    - cron: "*/2 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit auto-signal cron endpoint
+        run: |
+          curl -s -X POST "https://lastquestion.store/api/cron/auto-signal" \
+            -H "x-cron-secret: ${{ secrets.SIGNAL_CRON_SECRET }}" \
+            --max-time 40 -o /dev/null -w "HTTP %{http_code}\n"
