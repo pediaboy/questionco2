@@ -5,6 +5,13 @@ import Link from "next/link";
 import { ArrowLeft, Radio, RefreshCw, PlusCircle, Edit2, Trash2, TrendingUp, TrendingDown } from "lucide-react";
 import { isAdminAuthed } from "@/lib/adminAuth";
 
+// Must exactly match SIGNAL_PAIRS keys in lib/signalPairs.ts -- the auto-signal
+// cron's monitoring query matches on this EXACT string (no slash, no spaces). A
+// free-text pair field previously let a stale "XAU/USD" (with slash) row get
+// created, which the cron could never match -> forever "active" with zero
+// TP/SL/BE monitoring or alerts. Fixed 2026-07-20 by restricting to this list.
+const VALID_PAIRS = ["XAUUSD", "BTCUSDT", "ETHUSDT", "SOLUSDT"] as const;
+
 type Signal = {
   id: string;
   pair: string;
@@ -106,8 +113,13 @@ export default function SinyalAdminPage() {
   }
 
   async function editSignal(sig: Signal) {
-    const p = prompt("Pair:", sig.pair);
-    if (p === null) return;
+    const pRaw = prompt(`Pair (harus salah satu: ${VALID_PAIRS.join(", ")}):`, sig.pair);
+    if (pRaw === null) return;
+    const p = pRaw.trim().toUpperCase();
+    if (!VALID_PAIRS.includes(p as (typeof VALID_PAIRS)[number])) {
+      alert(`Pair harus persis salah satu dari: ${VALID_PAIRS.join(", ")} (tanpa spasi/garis miring) -- kalau tidak, sinyal ini tidak akan pernah dipantau otomatis (TP/SL/BE) oleh cron.`);
+      return;
+    }
     const e = prompt("Entry:", sig.entry.toString());
     if (e === null) return;
     const sl = prompt("Stop Loss:", sig.stop_loss.toString());
@@ -181,13 +193,17 @@ export default function SinyalAdminPage() {
         </h2>
         <form onSubmit={handleCreate} className="space-y-3">
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            <input
+            <select
               required
-              placeholder="PAIR (mis. XAU/USD)"
               value={pair}
               onChange={(e) => setPair(e.target.value)}
-              className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white placeholder:text-white/20 focus:outline-none focus:border-cyan-400/70 rounded-sm md:col-span-1"
-            />
+              className="w-full bg-[#05080f] border border-cyan-400/25 px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400/70 rounded-sm md:col-span-1"
+            >
+              <option value="">Pilih Pair</option>
+              {VALID_PAIRS.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
             <select
               value={direction}
               onChange={(e) => setDirection(e.target.value as "BUY" | "SELL")}
