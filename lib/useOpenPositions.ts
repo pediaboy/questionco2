@@ -9,6 +9,7 @@ export interface OpenPositionItem {
   pair: string;
   direction: "BUY" | "SELL";
   lot_size: number;
+  modal: number;
   price: number;
   created_at: string;
   status: "RUNNING" | "BE_HIT" | "SL_HIT";

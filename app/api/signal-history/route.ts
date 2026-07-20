@@ -15,8 +15,15 @@ export async function GET(req: NextRequest) {
   if (token) {
     const { data } = await admin.auth.getUser(token);
     if (data?.user) {
-      const { data: profile } = await admin.from("qco2_profiles").select("is_vip").eq("auth_user_id", data.user.id).maybeSingle();
-      isVip = !!profile?.is_vip;
+      // qco2_profiles has no "is_vip" column -- VIP is derived from role + expired_at, exactly
+      // like /api/member/me's serialize() does. Querying a nonexistent "is_vip" column here used
+      // to silently return undefined -> isVip always false, locking signals for real VIP members.
+      const { data: profile } = await admin
+        .from("qco2_profiles")
+        .select("role, expired_at")
+        .eq("auth_user_id", data.user.id)
+        .maybeSingle();
+      isVip = !!(profile?.role === "vip_member" && profile.expired_at && new Date(profile.expired_at) > new Date());
     }
   }
 

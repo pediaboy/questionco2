@@ -114,6 +114,8 @@ export default function OpenPositionsPage() {
                         <span>{item.pair}</span>
                         <span className="text-white/20">|</span>
                         <span>@{Number(item.price).toLocaleString("en-US", { maximumFractionDigits: 2 })}</span>
+                        <span className="text-white/20">|</span>
+                        <span>${item.modal.toLocaleString("en-US")}</span>
                       </div>
                       <div className="mt-1">
                         <StatusBadge status={item.status} pips={item.pips} />

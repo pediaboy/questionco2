@@ -11,7 +11,7 @@ export async function GET() {
     .select("email, full_name, total_lot, win_rate, total_trade, is_dummy, broker_registered")
     .or("is_dummy.eq.true,broker_registered.eq.true")
     .order("total_lot", { ascending: false })
-    .limit(20);
+    .limit(30);
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
 

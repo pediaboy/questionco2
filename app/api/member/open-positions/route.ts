@@ -14,13 +14,32 @@ const PAIR_LABEL: Record<string, string> = {
 
 const BE_PIPS = 20; // matches the real signal system's first BE threshold (see lib/signalAlerts.ts BE_THRESHOLDS)
 
-// Live feed of recent trade entries across all contest participants — makes the
-// "Kontes Capai Lot" feel like a real trading floor with members actively opening
-// positions right now. Each entry's status (RUNNING / BE_HIT / SL_HIT) is computed
-// against the REAL current market price for its pair every time this route is hit —
-// never fabricated. Uses the exact same pip math (pipUnit, slPips=50) as the real
-// auto-signal engine (lib/signalPairs.ts) so the pip counts shown are consistent
-// with what members see on actual signals.
+// Deterministic per-entry "modal" (USD notional) derived from lot_size, so the dollar
+// amount shown is always proportional to the lot -- fixes the earlier bug where lot and
+// modal were two independent random numbers (e.g. 0.01 lot showing $500, which makes no
+// sense). Rate is a stable hash of the entry id mapped into $5,000-$12,000 per lot, so the
+// SAME entry always shows the SAME modal everywhere it's displayed (Entry page, Portfolio
+// Live Feed) instead of flickering a different value on every poll.
+function stableModalForEntry(id: string, lotSize: number): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  }
+  const t = (hash % 100000) / 100000; // 0..1, stable per id
+  const min = Math.log(5000);
+  const max = Math.log(12000);
+  const perLotRate = Math.exp(min + t * (max - min));
+  return Math.round(Number(lotSize) * perLotRate);
+}
+
+// Live feed of recent trade entries across all contest participants — this is the SINGLE
+// shared data source for BOTH /dashboard/entry (Open Posisi Realtime) and the Portfolio
+// page's "Live Feed Aktivitas Komunitas" ticker, so the two views never show disconnected
+// data. Each entry's status (RUNNING / BE_HIT / SL_HIT) is computed against the REAL
+// current market price for its pair every time this route is hit — never fabricated. Uses
+// the exact same pip math (pipUnit, slPips=50) as the real auto-signal engine
+// (lib/signalPairs.ts) so the pip counts shown are consistent with what members see on
+// actual signals.
 export async function GET() {
   const admin = getSupabaseAdmin();
 
@@ -78,6 +97,7 @@ export async function GET() {
       pair: PAIR_LABEL[e.pair] || e.pair,
       direction,
       lot_size: e.lot_size,
+      modal: stableModalForEntry(e.id, e.lot_size),
       price: e.price,
       created_at: e.created_at,
       status,
