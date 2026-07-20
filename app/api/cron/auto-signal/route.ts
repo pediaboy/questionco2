@@ -9,6 +9,14 @@ import { sendTelegramMessage } from "@/lib/telegram";
 import { sendToChannel } from "@/lib/telegramApi";
 import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
 
+// Any signal (auto OR manual) is monitored the same way -- alerts always go to the
+// VIP channel, and ALSO to the public channel when the signal's audience is public.
+// This mirrors the exact routing the manual-signal creation flow already uses.
+async function sendSignalAlert(audience: string | null | undefined, text: string) {
+  await sendToChannel(vipChannelId(), text);
+  if (audience === "public") await sendToChannel(publicChannelId(), text);
+}
+
 export const dynamic = "force-dynamic";
 
 const CRON_SECRET = "7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d";
@@ -194,6 +202,82 @@ async function fanOutAlerts(
   );
 }
 
+async function monitorOneSignal(
+  admin: ReturnType<typeof getSupabaseAdmin>,
+  pair: PairConfig,
+  decimals: number,
+  livePrice: number,
+  active: Record<string, any>
+) {
+  const dir = active.direction as "BUY" | "SELL";
+  const tps: number[] = [active.take_profit, active.tp2, active.tp3, active.tp4].filter((v) => v !== null && v !== undefined);
+  const sl = active.stop_loss;
+
+  let hit: { level: string; price: number } | null = null;
+
+  if (dir === "BUY") {
+    if (livePrice <= sl) hit = { level: "sl", price: sl };
+    else {
+      for (let i = tps.length - 1; i >= 0; i--) {
+        if (livePrice >= tps[i]) {
+          hit = { level: `tp${i + 1}`, price: tps[i] };
+          break;
+        }
+      }
+    }
+  } else {
+    if (livePrice >= sl) hit = { level: "sl", price: sl };
+    else {
+      for (let i = tps.length - 1; i >= 0; i--) {
+        if (livePrice <= tps[i]) {
+          hit = { level: `tp${i + 1}`, price: tps[i] };
+          break;
+        }
+      }
+    }
+  }
+
+  if (hit) {
+    const status = hit.level === "sl" ? "sl_hit" : "tp_hit";
+    await admin
+      .from("qco2_signals")
+      .update({ status, hit_level: hit.level, closed_at: new Date().toISOString() })
+      .eq("id", active.id);
+
+    await sendSignalAlert(active.audience, buildTelegramCloseMessage(pair, dir, hit.level, hit.price, decimals, active.entry));
+    return { pair: pair.key, source: active.source, action: "closed", hit_level: hit.level, still_active: false };
+  }
+
+  // Not hit yet — check 60-minute timeout before anything else.
+  const ageMin = (Date.now() - new Date(active.created_at).getTime()) / 60000;
+  if (ageMin >= TIMEOUT_MINUTES) {
+    await admin
+      .from("qco2_signals")
+      .update({ status: "timeout", hit_level: "timeout", closed_at: new Date().toISOString() })
+      .eq("id", active.id);
+
+    await sendSignalAlert(active.audience, buildTimeoutMessage());
+    return { pair: pair.key, source: active.source, action: "timeout", age_min: Math.round(ageMin), still_active: false };
+  }
+
+  // Check running pips for Break-Even alert thresholds (30 / 50 / 70).
+  const pipsRunning =
+    dir === "BUY" ? (livePrice - active.entry) / pair.pipUnit : (active.entry - livePrice) / pair.pipUnit;
+
+  let newLevel: number = active.be_alert_level || 0;
+  for (const threshold of BE_THRESHOLDS) {
+    if (pipsRunning >= threshold && newLevel < threshold) {
+      await sendSignalAlert(active.audience, buildBEMessage(pair, threshold, pipsRunning, decimals));
+      newLevel = threshold;
+    }
+  }
+  if (newLevel !== (active.be_alert_level || 0)) {
+    await admin.from("qco2_signals").update({ be_alert_level: newLevel }).eq("id", active.id);
+  }
+
+  return { pair: pair.key, source: active.source, action: "monitoring", live_price: livePrice, pips_running: Math.round(pipsRunning), still_active: true };
+}
+
 async function processPair(
   pair: PairConfig,
   admin: ReturnType<typeof getSupabaseAdmin>,
@@ -207,92 +291,39 @@ async function processPair(
     return { pair: pair.key, action: "skipped_weekend" };
   }
 
-  // 1. Check for an existing active auto signal on this pair.
+  // 1. Fetch ALL active signals on this pair regardless of source -- auto AND
+  // manual (bot/admin-input) signals get the exact same real-time TP/SL/BE/timeout
+  // monitoring + alerts, routed to the right channel(s) via each row's own audience.
   const { data: activeRows } = await admin
     .from("qco2_signals")
     .select("*")
     .eq("pair", pair.label)
-    .eq("source", "auto")
     .eq("status", "active")
-    .order("created_at", { ascending: false })
-    .limit(1);
+    .order("created_at", { ascending: false });
 
-  const active = activeRows?.[0];
+  const rows = activeRows || [];
 
   const livePrice = pair.useLiveTickerFor ? await getLiveXauUsd() : await fetchOkxLastPrice(pair.dataInstId);
 
-  if (active) {
-    // Monitor for TP/SL hit.
-    const dir = active.direction as "BUY" | "SELL";
-    const tps: number[] = [active.take_profit, active.tp2, active.tp3, active.tp4].filter((v) => v !== null && v !== undefined);
-    const sl = active.stop_loss;
-
-    let hit: { level: string; price: number } | null = null;
-
-    if (dir === "BUY") {
-      if (livePrice <= sl) hit = { level: "sl", price: sl };
-      else {
-        for (let i = tps.length - 1; i >= 0; i--) {
-          if (livePrice >= tps[i]) {
-            hit = { level: `tp${i + 1}`, price: tps[i] };
-            break;
-          }
-        }
-      }
-    } else {
-      if (livePrice >= sl) hit = { level: "sl", price: sl };
-      else {
-        for (let i = tps.length - 1; i >= 0; i--) {
-          if (livePrice <= tps[i]) {
-            hit = { level: `tp${i + 1}`, price: tps[i] };
-            break;
-          }
-        }
-      }
+  if (rows.length > 0) {
+    const monitorResults = [];
+    let hasActiveAuto = false;
+    for (const row of rows) {
+      const r = await monitorOneSignal(admin, pair, decimals, livePrice, row);
+      monitorResults.push(r);
+      if (row.source === "auto" && r.still_active) hasActiveAuto = true;
     }
 
-    if (hit) {
-      const status = hit.level === "sl" ? "sl_hit" : "tp_hit";
-      await admin
-        .from("qco2_signals")
-        .update({ status, hit_level: hit.level, closed_at: new Date().toISOString() })
-        .eq("id", active.id);
-
-      await sendTelegramMessage(buildTelegramCloseMessage(pair, dir, hit.level, hit.price, decimals, active.entry));
-      return { pair: pair.key, action: "closed", hit_level: hit.level };
+    if (hasActiveAuto) {
+      // An auto signal is still running -- keep the existing cooldown (no new
+      // auto eval while one is open) and just report the monitoring results.
+      return monitorResults.length === 1 ? monitorResults[0] : { pair: pair.key, action: "monitoring", sub: monitorResults };
     }
-
-    // Not hit yet — check 60-minute timeout before anything else.
-    const ageMin = (Date.now() - new Date(active.created_at).getTime()) / 60000;
-    if (ageMin >= TIMEOUT_MINUTES) {
-      await admin
-        .from("qco2_signals")
-        .update({ status: "timeout", hit_level: "timeout", closed_at: new Date().toISOString() })
-        .eq("id", active.id);
-
-      await sendTelegramMessage(buildTimeoutMessage());
-      return { pair: pair.key, action: "timeout", age_min: Math.round(ageMin) };
-    }
-
-    // Check running pips for Break-Even alert thresholds (30 / 50 / 70).
-    const pipsRunning =
-      dir === "BUY" ? (livePrice - active.entry) / pair.pipUnit : (active.entry - livePrice) / pair.pipUnit;
-
-    let newLevel: number = active.be_alert_level || 0;
-    for (const threshold of BE_THRESHOLDS) {
-      if (pipsRunning >= threshold && newLevel < threshold) {
-        await sendTelegramMessage(buildBEMessage(pair, threshold, pipsRunning, decimals));
-        newLevel = threshold;
-      }
-    }
-    if (newLevel !== (active.be_alert_level || 0)) {
-      await admin.from("qco2_signals").update({ be_alert_level: newLevel }).eq("id", active.id);
-    }
-
-    return { pair: pair.key, action: "monitoring", live_price: livePrice, pips_running: Math.round(pipsRunning) };
+    // No active AUTO signal (only manual ones, if any, still open) -- fall through
+    // to a fresh institutional evaluation below, same as the empty-rows case.
   }
 
-  // 2. No active signal — evaluate the institutional SMC strategy for a fresh trigger.
+  // 2. No active AUTO signal — evaluate the institutional SMC strategy for a fresh trigger.
   const [m5, m1] = await Promise.all([
     fetchOkxCandles(pair.dataInstId, "5m", 300),
     fetchOkxCandles(pair.dataInstId, "1m", 100),

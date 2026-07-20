@@ -12,6 +12,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import VipUpgradeModal from "@/components/VipUpgradeModal";
+import { SIGNAL_PAIRS } from "@/lib/signalPairs";
 import { motion } from "framer-motion";
 import {
   Database,
@@ -131,11 +132,16 @@ interface SignalRow {
   source: string;
 }
 
+interface ChartData {
+  candles: { o: number; h: number; l: number; c: number }[];
+  ema9: number[];
+  ema21: number[];
+}
+
 interface ApiResponse {
   success: boolean;
   pipeline: PairLiveStatus[];
-  target: string | null;
-  chart: { candles: { o: number; h: number; l: number; c: number }[]; ema9: number[]; ema21: number[] };
+  charts: Record<string, ChartData>;
   signals: SignalRow[];
   logs: EngineLogRow[];
 }
@@ -243,12 +249,32 @@ function PendingPipelineList({ pipeline }: { pipeline: PairLiveStatus[] }) {
             const ready = p.stage === "ready";
             const barColor = p.direction === null ? "#475569" : isLong ? C.green : C.red;
             return (
-              <div
+              <motion.div
                 key={p.pair}
-                className="relative flex items-center gap-3 border px-3 py-2.5"
+                className="relative flex items-center gap-3 overflow-hidden border px-3 py-2.5"
                 style={{ ...chamferMicro(8), borderColor: ready ? C.cyan : C.iron, backgroundColor: ready ? "rgba(0,240,255,0.06)" : "rgba(17,21,32,0.5)" }}
+                animate={
+                  ready
+                    ? { boxShadow: [`0 0 0px ${C.cyan}00`, `0 0 16px ${C.cyan}55`, `0 0 0px ${C.cyan}00`] }
+                    : { boxShadow: `0 0 0px transparent` }
+                }
+                transition={{ duration: 1.6, repeat: ready ? Infinity : 0 }}
               >
-                <div style={{ color: barColor }}>{isLong ? <TrendingUp size={16} strokeWidth={2} /> : <TrendingDown size={16} strokeWidth={2} />}</div>
+                {/* continuously moving scan-line sweep across every row -- always animating, not just "ready" ones */}
+                <motion.div
+                  className="pointer-events-none absolute inset-y-0 w-10"
+                  style={{ background: `linear-gradient(90deg, transparent, ${barColor}22, transparent)` }}
+                  animate={{ left: ["-10%", "110%"] }}
+                  transition={{ duration: 2.6, repeat: Infinity, ease: "linear", delay: Math.random() * 1.5 }}
+                />
+
+                <motion.div
+                  style={{ color: barColor }}
+                  animate={p.direction ? { scale: [1, 1.15, 1] } : { rotate: 360 }}
+                  transition={p.direction ? { duration: 1.4, repeat: Infinity } : { duration: 2, repeat: Infinity, ease: "linear" }}
+                >
+                  {isLong ? <TrendingUp size={16} strokeWidth={2} /> : p.direction === "SELL" ? <TrendingDown size={16} strokeWidth={2} /> : <ScanLine size={16} strokeWidth={2} />}
+                </motion.div>
 
                 <div className="flex min-w-[92px] flex-col leading-none">
                   <span className="font-mono text-[11px] font-bold text-slate-200">{p.pair}</span>
@@ -264,13 +290,19 @@ function PendingPipelineList({ pipeline }: { pipeline: PairLiveStatus[] }) {
                     animate={{ width: `${Math.max(2, p.confidence)}%` }}
                     transition={{ duration: 0.6, ease: "easeOut" }}
                   />
+                  <motion.div
+                    className="absolute inset-y-0 w-4"
+                    style={{ background: `linear-gradient(90deg, transparent, ${barColor}, transparent)`, opacity: 0.6 }}
+                    animate={{ left: ["-15%", "115%"] }}
+                    transition={{ duration: 1.8, repeat: Infinity, ease: "linear" }}
+                  />
                 </div>
 
                 <span className="w-11 text-right font-mono text-[11px] font-bold" style={{ color: ready ? C.green : p.confidence >= 50 ? C.gold : "#64748B" }}>
                   {p.confidence}%
                 </span>
                 <span className="w-8 text-right font-mono text-[9px] text-slate-600">{timeAgo(p.checkedAt)}</span>
-              </div>
+              </motion.div>
             );
           })}
         </div>
@@ -301,7 +333,41 @@ interface EngineLogRow {
   created_at: string;
 }
 
-function EngineTerminalLog({ logs }: { logs: EngineLogRow[] }) {
+const SCAN_STEPS = ["INGEST", "EMA", "VWAP", "RSI/ADX", "SMC STRUCT", "NEWS FILTER"];
+
+/* Purely cosmetic "still alive between real ticks" indicator -- clearly a live
+   polling readout (never mixed into the real log rows above it), so the page never
+   feels frozen during the ~5min gap between actual qco2_engine_logs writes. */
+function LiveScanIndicator({ pairs }: { pairs: string[] }) {
+  const [pairIdx, setPairIdx] = useState(0);
+  const [stepIdx, setStepIdx] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setStepIdx((s) => {
+        if (s + 1 >= SCAN_STEPS.length) {
+          setPairIdx((p) => (p + 1) % Math.max(1, pairs.length));
+          return 0;
+        }
+        return s + 1;
+      });
+    }, 700);
+    return () => clearInterval(iv);
+  }, [pairs.length]);
+
+  const pair = pairs[pairIdx] || "—";
+  return (
+    <div className="flex items-center gap-2 py-0.5">
+      <motion.span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: C.green }} animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 0.8, repeat: Infinity }} />
+      <span className="font-bold" style={{ color: C.green }}>[SCAN]</span>
+      <span className="text-slate-500">{pair}</span>
+      <span className="text-slate-400">
+        checking <span style={{ color: C.cyan }}>{SCAN_STEPS[stepIdx]}</span>...
+      </span>
+    </div>
+  );
+}
+
+function EngineTerminalLog({ logs, pairs }: { logs: EngineLogRow[]; pairs: string[] }) {
   const boxRef = React.useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
@@ -316,7 +382,10 @@ function EngineTerminalLog({ logs }: { logs: EngineLogRow[] }) {
           <span className="font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">
             AI ENGINE <span className="text-slate-600">//</span> TERMINAL
           </span>
-          <span className="ml-auto font-mono text-[9px] tracking-[0.2em] text-slate-600">/dev/lastq</span>
+          <span className="ml-auto flex items-center gap-1.5 font-mono text-[9px] tracking-[0.2em] text-slate-600">
+            <motion.span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: C.green }} animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 1, repeat: Infinity }} />
+            SCANNING
+          </span>
         </div>
 
         <div ref={boxRef} className="max-h-[220px] overflow-y-auto font-mono text-[10px] leading-relaxed">
@@ -335,6 +404,7 @@ function EngineTerminalLog({ logs }: { logs: EngineLogRow[] }) {
               </div>
             );
           })}
+          <LiveScanIndicator pairs={pairs} />
           <div className="flex items-center gap-1 pt-1 text-slate-600">
             <span>{">"}</span>
             <motion.span className="inline-block h-3 w-1.5" style={{ backgroundColor: C.cyan }} animate={{ opacity: [1, 0, 1] }} transition={{ duration: 1, repeat: Infinity }} />
@@ -349,7 +419,7 @@ function EngineTerminalLog({ logs }: { logs: EngineLogRow[] }) {
 /*  TERMINAL CHART — real OKX M15 candles for the current highest-confidence pair */
 /* -------------------------------------------------------------------------- */
 
-const HUD_INDICATORS = (target: string, candles: { o: number; h: number; l: number; c: number }[]) => {
+const HUD_INDICATORS = (candles: { o: number; h: number; l: number; c: number }[]) => {
   const last = candles[candles.length - 1];
   const prev = candles[candles.length - 2];
   const range = last ? Math.abs(last.h - last.l) : 0;
@@ -358,11 +428,13 @@ const HUD_INDICATORS = (target: string, candles: { o: number; h: number; l: numb
   return [
     { label: "RANGE", value: volLabel, color: C.green },
     { label: "CANDLES", value: `${candles.length} M15`, color: C.cyan },
-    { label: "TARGET", value: target, color: C.gold },
   ];
 };
 
-function TerminalChart({ target, chart }: { target: string; chart: ApiResponse["chart"] }) {
+/* One compact live chart card for a single pair -- rendered 4x in a grid so the
+   Live Market Feed shows XAU/BTC/ETH/SOL simultaneously (was previously only the
+   single highest-confidence pair, per owner request 2026-07-20). */
+function MiniChart({ pairLabel, chart, statusColor }: { pairLabel: string; chart: ChartData; statusColor: string }) {
   const { candles, ema9, ema21 } = chart;
   const points = useMemo(() => {
     if (candles.length === 0) return null;
@@ -371,24 +443,24 @@ function TerminalChart({ target, chart }: { target: string; chart: ApiResponse["
     const max = Math.max(...highs);
     const min = Math.min(...lows);
     const span = max - min || 1;
-    const toY = (v: number) => 110 - ((v - min) / span) * 100;
+    const toY = (v: number) => 82 - ((v - min) / span) * 74;
     const toX = (i: number) => 8 + i * (384 / Math.max(1, candles.length - 1));
     const toPath = (vals: number[]) =>
       vals.map((v, i) => (Number.isFinite(v) ? `${i === 0 ? "M" : "L"} ${toX(i).toFixed(1)} ${toY(v).toFixed(1)}` : "")).join(" ");
     return { toX, toY, ema9Path: toPath(ema9), ema21Path: toPath(ema21) };
   }, [candles, ema9, ema21]);
 
-  const indicators = HUD_INDICATORS(target, candles);
+  const indicators = HUD_INDICATORS(candles);
 
   return (
-    <div className="relative p-px" style={{ backgroundColor: C.cyan + "66", ...chamfer(14) }}>
-      <div className="relative" style={{ backgroundColor: C.card, ...chamfer(13) }}>
-        <CornerTicks />
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5" style={{ borderColor: C.iron }}>
+    <div className="relative p-px" style={{ backgroundColor: statusColor + "66", ...chamfer(12) }}>
+      <div className="relative" style={{ backgroundColor: C.card, ...chamfer(11) }}>
+        <CornerTicks color={statusColor} />
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2" style={{ borderColor: C.iron }}>
           <div className="flex items-center gap-2">
-            <ScanLine size={14} style={{ color: C.cyan }} strokeWidth={1.6} />
-            <span className="font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">
-              LIVE MARKET FEED <span className="text-slate-600">::</span> <span style={{ color: C.gold }}>{target} M15</span>
+            <ScanLine size={12} style={{ color: statusColor }} strokeWidth={1.6} />
+            <span className="font-mono text-[9px] font-bold uppercase tracking-[0.25em]" style={{ color: statusColor }}>
+              {pairLabel} <span className="text-slate-600">M15</span>
             </span>
           </div>
           <div className="flex items-center gap-1.5">
@@ -398,23 +470,23 @@ function TerminalChart({ target, chart }: { target: string; chart: ApiResponse["
               animate={{ opacity: [1, 0.3, 1] }}
               transition={{ duration: 1, repeat: Infinity }}
             />
-            <span className="font-mono text-[9px] tracking-[0.25em]" style={{ color: C.red }}>
-              LIVE OKX
+            <span className="font-mono text-[8px] tracking-[0.2em]" style={{ color: C.red }}>
+              LIVE
             </span>
           </div>
         </div>
 
         <div className="relative">
           {!points ? (
-            <div className="flex h-[120px] items-center justify-center font-mono text-[10px] text-slate-600">[ MEMUAT DATA OKX... ]</div>
+            <div className="flex h-[90px] items-center justify-center font-mono text-[9px] text-slate-600">[ MEMUAT... ]</div>
           ) : (
-            <svg viewBox="0 0 400 120" className="block h-auto w-full" preserveAspectRatio="none" aria-hidden="true">
+            <svg viewBox="0 0 400 90" className="block h-auto w-full" preserveAspectRatio="none" aria-hidden="true">
               <g opacity="0.1" stroke={C.cyan} strokeWidth="0.4">
                 {Array.from({ length: 9 }).map((_, i) => (
-                  <line key={`v${i}`} x1={40 + i * 40} y1="0" x2={40 + i * 40} y2="120" />
+                  <line key={`v${i}`} x1={40 + i * 40} y1="0" x2={40 + i * 40} y2="90" />
                 ))}
                 {Array.from({ length: 5 }).map((_, i) => (
-                  <line key={`h${i}`} x1="0" y1={20 + i * 20} x2="400" y2={20 + i * 20} />
+                  <line key={`h${i}`} x1="0" y1={15 + i * 15} x2="400" y2={15 + i * 15} />
                 ))}
               </g>
 
@@ -467,27 +539,57 @@ function TerminalChart({ target, chart }: { target: string; chart: ApiResponse["
   );
 }
 
+/* Grid of all 4 pairs' live charts + a header, replacing the old single-pair panel. */
+const SIGNAL_PAIR_LABELS = SIGNAL_PAIRS.map((p) => p.label);
+
+function LiveMarketGrid({ charts, pipeline }: { charts: Record<string, ChartData>; pipeline: PairLiveStatus[] }) {
+  const dirByPair = new Map(pipeline.map((p) => [p.pair, p.direction]));
+  return (
+    <Panel size={14}>
+      <CornerTicks />
+      <div className="p-4 md:p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <ScanLine size={14} style={{ color: C.cyan }} strokeWidth={1.6} />
+          <span className="font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">LIVE MARKET FEED</span>
+          <span className="ml-auto font-mono text-[9px] tracking-[0.2em] text-slate-600">4 PAIRS :: OKX</span>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {SIGNAL_PAIR_LABELS.map((label) => {
+            const dir = dirByPair.get(label);
+            const color = dir === "BUY" ? C.green : dir === "SELL" ? C.red : C.cyan;
+            const chart = charts[label] || { candles: [], ema9: [], ema21: [] };
+            return <MiniChart key={label} pairLabel={label} chart={chart} statusColor={color} />;
+          })}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /*  SIGNAL LOG — real rows from qco2_signals                                  */
 /* -------------------------------------------------------------------------- */
 
-// Honest mapping to real DB states: active = still open, watching for TP/SL/timeout;
-// tp_hit/closed = actually fired & completed; sl_hit/timeout = ended without a win.
-type UiStatus = "PENDING" | "SENT" | "CANCELLED";
+// Honest mapping to real DB states -- a row only ever exists AFTER the signal
+// message has already gone out to Telegram, so "active" must read as SENT/running,
+// never PENDING (fixed 2026-07-20 per owner report: signals that were already sent
+// were confusingly shown as "PENDING").
+type UiStatus = "SENT" | "WIN" | "LOSS" | "TIMEOUT";
 function toUiStatus(row: SignalRow): UiStatus {
-  if (row.status === "active") return "PENDING";
-  if (row.status === "tp_hit" || row.status === "closed") return "SENT";
-  return "CANCELLED"; // sl_hit, timeout
+  if (row.status === "active") return "SENT";
+  if (row.status === "tp_hit" || row.status === "closed") return "WIN";
+  if (row.status === "timeout") return "TIMEOUT";
+  return "LOSS"; // sl_hit
 }
 
-function LoadingDots() {
+function LoadingDots({ color = C.gold }: { color?: string }) {
   return (
     <span className="inline-flex gap-[2px]" aria-hidden="true">
       {[0, 1, 2].map((i) => (
         <motion.span
           key={i}
           className="inline-block h-[3px] w-[3px]"
-          style={{ backgroundColor: C.gold }}
+          style={{ backgroundColor: color }}
           animate={{ opacity: [0.2, 1, 0.2], y: [0, -2, 0] }}
           transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.18 }}
         />
@@ -497,26 +599,33 @@ function LoadingDots() {
 }
 
 function StatusBadge({ status }: { status: UiStatus }) {
-  if (status === "PENDING") {
-    return (
-      <span className="inline-flex items-center gap-1.5 border border-dashed px-2 py-0.5 font-mono text-[9px] font-bold tracking-[0.15em]" style={{ ...chamferMicro(4), borderColor: C.gold, color: C.gold }}>
-        [ PENDING ] <LoadingDots />
-      </span>
-    );
-  }
   if (status === "SENT") {
     return (
       <span
         className="inline-flex items-center gap-1.5 border px-2 py-0.5 font-mono text-[9px] font-bold tracking-[0.15em]"
         style={{ ...chamferMicro(4), borderColor: C.cyan, color: C.cyan, boxShadow: `0 0 10px ${C.cyan}44, inset 0 0 6px ${C.cyan}22` }}
       >
-        [ SENT ]
+        [ SENT ] <LoadingDots color={C.cyan} />
+      </span>
+    );
+  }
+  if (status === "WIN") {
+    return (
+      <span className="inline-flex items-center gap-1.5 border px-2 py-0.5 font-mono text-[9px] font-bold tracking-[0.15em]" style={{ ...chamferMicro(4), borderColor: C.green, color: C.green }}>
+        [ WIN ]
+      </span>
+    );
+  }
+  if (status === "TIMEOUT") {
+    return (
+      <span className="inline-flex items-center gap-1.5 border px-2 py-0.5 font-mono text-[9px] font-bold tracking-[0.15em] opacity-70" style={{ ...chamferMicro(4), borderColor: C.gold, color: C.gold }}>
+        [ TIMEOUT ]
       </span>
     );
   }
   return (
     <span className="inline-flex items-center gap-1.5 border px-2 py-0.5 font-mono text-[9px] font-bold tracking-[0.15em] line-through opacity-50" style={{ ...chamferMicro(4), borderColor: C.red, color: C.red }}>
-      [ CANCELLED ]
+      [ LOSS ]
     </span>
   );
 }
@@ -657,11 +766,11 @@ export default function PendingPage() {
             </motion.section>
 
             <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2, duration: 0.5 }} aria-label="AI Engine Terminal Log">
-              <EngineTerminalLog logs={data.logs} />
+              <EngineTerminalLog logs={data.logs} pairs={SIGNAL_PAIR_LABELS} />
             </motion.section>
 
             <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3, duration: 0.5 }} aria-label="Live Market Chart">
-              <TerminalChart target={data.target || "—"} chart={data.chart} />
+              <LiveMarketGrid charts={data.charts} pipeline={data.pipeline} />
             </motion.section>
 
             <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4, duration: 0.5 }} aria-label="Signal Log History">

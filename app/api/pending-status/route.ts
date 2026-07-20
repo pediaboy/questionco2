@@ -7,6 +7,23 @@ import { SIGNAL_PAIRS } from "@/lib/signalPairs";
 
 export const dynamic = "force-dynamic";
 
+async function buildChartFor(dataInstId: string) {
+  const m1Raw = await fetchOkxCandles(dataInstId, "1m", 100).catch(() => []);
+  // Resample confirmed 1m -> 15m for a compact real chart (avoids a second OKX bar-size call)
+  const m15: { o: number; h: number; l: number; c: number }[] = [];
+  for (let i = 0; i + 15 <= m1Raw.length; i += 15) {
+    const chunk = m1Raw.slice(i, i + 15);
+    m15.push({
+      o: chunk[0].open,
+      h: Math.max(...chunk.map((c) => c.high)),
+      l: Math.min(...chunk.map((c) => c.low)),
+      c: chunk[chunk.length - 1].close,
+    });
+  }
+  const closes = m15.map((c) => c.c);
+  return { candles: m15, ema9: ema(closes, 9), ema21: ema(closes, 21) };
+}
+
 export async function GET() {
   try {
     const admin = getSupabaseAdmin();
@@ -26,31 +43,18 @@ export async function GET() {
     ]);
     const logs = (logsRes.data || []).slice().reverse(); // chronological order for the terminal feed
 
-    // Pick the pair the engine is currently most interested in (highest live confidence)
-    const target = [...pipeline].sort((a, b) => b.confidence - a.confidence)[0] || pipeline[0];
-    const targetPairConfig = SIGNAL_PAIRS.find((p) => p.label === target?.pair) || SIGNAL_PAIRS[0];
-
-    const m15Raw = await fetchOkxCandles(targetPairConfig.dataInstId, "1m", 100).catch(() => []);
-    // Resample confirmed 1m -> 15m for a compact real chart (avoids a second OKX bar-size call)
-    const m15: { o: number; h: number; l: number; c: number }[] = [];
-    for (let i = 0; i + 15 <= m15Raw.length; i += 15) {
-      const chunk = m15Raw.slice(i, i + 15);
-      m15.push({
-        o: chunk[0].open,
-        h: Math.max(...chunk.map((c) => c.high)),
-        l: Math.min(...chunk.map((c) => c.low)),
-        c: chunk[chunk.length - 1].close,
-      });
-    }
-    const closes = m15.map((c) => c.c);
-    const ema9 = ema(closes, 9);
-    const ema21 = ema(closes, 21);
+    // Live Market Feed now shows ALL 4 pairs at once (was previously only the single
+    // highest-confidence "target" pair) -- per owner request 2026-07-20.
+    const chartEntries = await Promise.all(
+      SIGNAL_PAIRS.map(async (p) => [p.label, await buildChartFor(p.dataInstId).catch(() => ({ candles: [], ema9: [], ema21: [] }))] as const)
+    );
+    const charts: Record<string, { candles: { o: number; h: number; l: number; c: number }[]; ema9: number[]; ema21: number[] }> =
+      Object.fromEntries(chartEntries);
 
     return NextResponse.json({
       success: true,
       pipeline,
-      target: target?.pair || null,
-      chart: { candles: m15, ema9, ema21 },
+      charts,
       signals: signalsRes.data || [],
       logs,
     });
