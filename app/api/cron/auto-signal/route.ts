@@ -24,6 +24,12 @@ const CRON_SECRET = "7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d";
 const BE_THRESHOLDS = [20, 50, 70]; // first level lowered 30->20 per owner request 2026-07-20
 const AUTO_COOLDOWN_MINUTES = 30; // no fresh auto signal for a pair within 30min of its last auto signal closing (owner request 2026-07-20)
 const TIMEOUT_MINUTES = 60;
+// XAU Aggressive scalping needs a much shorter timeout (owner request 2026-07-20:
+// "kalo dah 20menit ga nyentuh langsung kasih time out") -- BTC/ETH/SOL institutional
+// SMC keeps the slower 60-min window.
+function timeoutMinutesFor(pairKey: string): number {
+  return pairKey === "XAUUSD" ? 20 : TIMEOUT_MINUTES;
+}
 const ATR_SL_MULTIPLIER = 1.5;
 const RR_TARGETS = [2, 3, 4, 6]; // TP1=RR1:2, TP2=RR1:3, TP3=RR1:4, TP4=RR1:6 (extended runner)
 
@@ -111,8 +117,8 @@ function buildBEMessage(pair: PairConfig, threshold: number, pipsRunning: number
   return `🔐 <b>AMANKAN POSISI — SET BE</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 RUNNING  : ${fmt(pipsRunning)} ${pair.pipLabelSuffix}\n🎯 TRIGGER  : ${threshold} ${pair.pipLabelSuffix}\n\n✅ Posisi sudah masuk area aman.\nGeser SL ke entry (Break Even) untuk mengunci modal.`;
 }
 
-function buildTimeoutMessage() {
-  return `⏳ <b>TIMEOUT 60 MENIT</b>\n━━━━━━━━━━━━━━━━\n\nRonde belum mencapai target.\n🔓 Slot signal baru sudah terbuka.\n\n📌 Tetap selektif — utamakan kualitas setup daripada kuantitas.`;
+function buildTimeoutMessage(minutes: number) {
+  return `⏳ <b>TIMEOUT ${minutes} MENIT</b>\n━━━━━━━━━━━━━━━━\n\nRonde belum mencapai target.\n🔓 Slot signal baru sudah terbuka.\n\n📌 Tetap selektif — utamakan kualitas setup daripada kuantitas.`;
 }
 
 function buildSessionChangeMessage(opened: string[], closed: string[], active: string[]): string {
@@ -250,15 +256,16 @@ async function monitorOneSignal(
     return { pair: pair.key, source: active.source, action: "closed", hit_level: hit.level, still_active: false };
   }
 
-  // Not hit yet — check 60-minute timeout before anything else.
+  // Not hit yet — check the per-pair timeout before anything else (XAU=20min, others=60min).
   const ageMin = (Date.now() - new Date(active.created_at).getTime()) / 60000;
-  if (ageMin >= TIMEOUT_MINUTES) {
+  const timeoutMins = timeoutMinutesFor(pair.key);
+  if (ageMin >= timeoutMins) {
     await admin
       .from("qco2_signals")
       .update({ status: "timeout", hit_level: "timeout", closed_at: new Date().toISOString() })
       .eq("id", active.id);
 
-    await sendSignalAlert(active.audience, buildTimeoutMessage());
+    await sendSignalAlert(active.audience, buildTimeoutMessage(timeoutMins));
     return { pair: pair.key, source: active.source, action: "timeout", age_min: Math.round(ageMin), still_active: false };
   }
 
@@ -332,13 +339,16 @@ async function processPair(
 
   // 1b. 30-minute cooldown after the last AUTO signal closed for this pair (owner
   // request 2026-07-20: "kalo udah kena TP jangan ngirim lagi sampe timeout 30menit").
-  // Applies after ANY closure type (TP hit, SL hit, or timeout) for consistency.
+  // Applies after a real TP/SL hit only -- NOT after a timeout (owner 2026-07-20:
+  // "kalo dah 20menit ga nyentuh langsung kasih time out alert signal baru" -- a
+  // timeout means nothing conclusive happened, so the pair should be free to
+  // re-evaluate immediately on the next tick instead of waiting another 30min).
   const { data: lastClosedAuto } = await admin
     .from("qco2_signals")
     .select("closed_at")
     .eq("pair", pair.label)
     .eq("source", "auto")
-    .neq("status", "active")
+    .in("status", ["tp_hit", "sl_hit"])
     .order("closed_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -371,7 +381,7 @@ async function processPair(
       fetchOkxCandles(pair.dataInstId, "3m", 60),
       fetchOkxCandles(pair.dataInstId, "5m", 60),
     ]);
-    result = evaluateXauAggressive(m1Aggr, m3Aggr, m5Aggr, newsBlackout);
+    result = evaluateXauAggressive(m1Aggr, m3Aggr, m5Aggr, newsBlackout, pair.pipUnit);
     strategyMode = "xau_aggressive_scalp_m1";
   } else {
     const [m5, m1] = await Promise.all([

@@ -198,7 +198,23 @@ function liquiditySweep(m3: Candle[], lookback = 10): "BUY" | "SELL" | null {
   return null;
 }
 
-export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], newsBlackout: boolean): XauAggressiveResult {
+// Real-time momentum breakout (added 2026-07-20, owner: "sebelom xau mau terbang
+// atau terjun trend nya langsung ngasih sinyal yg valid" -- catch a fast directional
+// move AS it's happening, without waiting for a PSAR flip which can lag). If price
+// has net-moved >= 25 pips in one direction over the last `lookback` M1 candles,
+// that raw momentum is itself treated as a valid standalone trigger (in addition to,
+// not instead of, the existing PSAR-flip trigger).
+function momentumBreakout(m1: Candle[], pipUnit: number, pipsThreshold = 25, lookback = 10): { direction: "BUY" | "SELL"; pipsMoved: number } | null {
+  if (m1.length < lookback + 1) return null;
+  const last = m1.length - 1;
+  const startClose = m1[last - lookback].close;
+  const nowClose = m1[last].close;
+  const movedPips = (nowClose - startClose) / pipUnit;
+  if (Math.abs(movedPips) < pipsThreshold) return null;
+  return { direction: movedPips > 0 ? "BUY" : "SELL", pipsMoved: Math.abs(movedPips) };
+}
+
+export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], newsBlackout: boolean, pipUnit: number = 0.1): XauAggressiveResult {
   const checklist: { label: string; pass: boolean }[] = [];
 
   if (newsBlackout) {
@@ -220,10 +236,12 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
   const atrArr = atrSeries(m1, 14);
   const atr = atrArr[last] || atrArr.filter((v) => !Number.isNaN(v)).slice(-1)[0] || 0;
 
-  // 1. PSAR flip within the last 6 confirmed candles (mandatory trigger). Widened
-  // from 3->6 (2026-07-20, "trend nya ga muncul samsek") -- the cron ticks every 5
+  // 1. Primary trigger -- EITHER a PSAR flip within the last 6 confirmed candles,
+  // OR a real-time 25-pip momentum breakout (added 2026-07-20, catches a fast move
+  // AS it happens instead of waiting for PSAR to lag behind). Widened PSAR lookback
+  // 3->6 (2026-07-20, "trend nya ga muncul samsek") -- the cron ticks every 5
   // minutes, so a 3-candle (3min) lookback was systematically missing flips that
-  // happened between ticks. 6 candles gives safe overlap.
+  // happened between ticks.
   let psarFlip: "BUY" | "SELL" | null = null;
   for (let i = last; i >= Math.max(1, last - 5); i--) {
     if (trend[i] === "up" && trend[i - 1] === "down") {
@@ -237,23 +255,36 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
   }
   checklist.push({ label: "Parabolic SAR (0.02/0.2) Flip", pass: psarFlip !== null });
 
-  if (!psarFlip) {
+  const momentum = momentumBreakout(m1, pipUnit, 25, 10);
+  checklist.push({ label: "Momentum Breakout (25 pips / 10min)", pass: momentum !== null });
+
+  let triggerSource: "psar" | "momentum" | null = null;
+  let primaryDirection: "BUY" | "SELL" | null = null;
+  if (psarFlip) {
+    primaryDirection = psarFlip;
+    triggerSource = "psar";
+  } else if (momentum) {
+    primaryDirection = momentum.direction;
+    triggerSource = "momentum";
+  }
+
+  if (!primaryDirection) {
     return {
       direction: null,
       confidence: 0,
-      reasoning: "Belum ada PSAR flip di 3 candle M1 terakhir — NO TRADE",
+      reasoning: "Belum ada PSAR flip maupun momentum breakout 25 pips — NO TRADE",
       atr,
       checklist,
-      blockReason: "Belum ada PSAR flip",
+      blockReason: "Belum ada PSAR flip / momentum breakout",
     };
   }
 
-  // 1b. HARD trend gate: only reject if M5 EMA20/50 trend directly OPPOSES the PSAR
-  // flip direction (loosened 2026-07-20, "trend nya ga muncul samsek" -- requiring
+  // 1b. HARD trend gate: only reject if M5 EMA20/50 trend directly OPPOSES the
+  // trigger direction (loosened 2026-07-20, "trend nya ga muncul samsek" -- requiring
   // an exact match was too strict and choked off almost every signal). Flat/none
   // trend no longer blocks -- it's neutral, not "must match".
   const trendM5 = m5Trend(m5);
-  const trendOpposes = (trendM5 === "down" && psarFlip === "BUY") || (trendM5 === "up" && psarFlip === "SELL");
+  const trendOpposes = (trendM5 === "down" && primaryDirection === "BUY") || (trendM5 === "up" && primaryDirection === "SELL");
   const trendMatches = !trendOpposes;
   checklist.push({ label: "M5 Trend Alignment (EMA20/50)", pass: trendMatches });
 
@@ -261,15 +292,19 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
     return {
       direction: null,
       confidence: 20,
-      reasoning: `PSAR flip ${psarFlip} tapi trend M5 ${trendM5} — lawan trend, NO TRADE`,
+      reasoning: `${triggerSource === "momentum" ? `Momentum breakout ${primaryDirection}` : `PSAR flip ${primaryDirection}`} tapi trend M5 ${trendM5} — lawan trend, NO TRADE`,
       atr,
       checklist,
-      blockReason: "PSAR flip melawan trend M5",
+      blockReason: `${triggerSource === "momentum" ? "Momentum breakout" : "PSAR flip"} melawan trend M5`,
     };
   }
 
+  // Backward-compat alias -- the rest of the function below still refers to
+  // psarFlip as "the trigger direction" when checking 2nd-confirmation alignment.
+  const effectivePsarFlip = triggerSource === "psar" ? psarFlip : null;
+
   // 2. EMA3/EMA7 crossover within last 6 bars (widened with PSAR window above), same
-  // direction as PSAR flip.
+  // direction as the trigger.
   let emaCross: "BUY" | "SELL" | null = null;
   for (let i = last; i >= Math.max(1, last - 5); i--) {
     if (ema3[i - 1] <= ema7[i - 1] && ema3[i] > ema7[i]) {
@@ -281,7 +316,7 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
       break;
     }
   }
-  const emaConfirms = emaCross === psarFlip;
+  const emaConfirms = emaCross === primaryDirection;
   checklist.push({ label: "EMA 3/7 Crossover", pass: emaConfirms });
 
   // 3. StochRSI(5,3,3) exiting <10 turning up, or >90 turning down, same direction.
@@ -298,30 +333,33 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
       }
     }
   }
-  const stochConfirms = stochTurn === psarFlip;
+  const stochConfirms = stochTurn === primaryDirection;
   checklist.push({ label: "Stochastic RSI (5,3,3) Extreme Turn", pass: stochConfirms });
 
-  // 2b. Liquidity sweep on M3, same direction as PSAR flip -- a 3rd option for the
-  // required 2nd confirmation (stop-hunt reversal pattern, not volatility-gated).
+  // 2b. Liquidity sweep on M3, same direction as the trigger -- a 3rd option for the
+  // 2nd confirmation (stop-hunt reversal pattern, not volatility-gated).
   const sweep = liquiditySweep(m3, 10);
-  const sweepConfirms = sweep === psarFlip;
+  const sweepConfirms = sweep === primaryDirection;
   checklist.push({ label: "Liquidity Sweep (M3)", pass: sweepConfirms });
 
-  // Aggressive gate: PSAR flip is mandatory, plus >=1 of {EMA cross, StochRSI turn,
-  // M3 liquidity sweep} in the SAME direction ("double confirmation", no waiting
-  // for a 2nd candle, fires regardless of volatility).
-  if (!emaConfirms && !stochConfirms && !sweepConfirms) {
+  // Aggressive gate: if triggered by a PSAR flip, still require >=1 of {EMA cross,
+  // StochRSI turn, M3 liquidity sweep} in the SAME direction ("double confirmation").
+  // If triggered by a 25-pip momentum breakout instead (added 2026-07-20, "sebelom
+  // xau mau terbang atau terjun ... langsung ngasih sinyal yg valid"), the realized
+  // price move IS the confirmation -- fires immediately, no extra hurdle, to catch
+  // the move fast rather than waiting.
+  if (triggerSource === "psar" && !emaConfirms && !stochConfirms && !sweepConfirms) {
     return {
       direction: null,
       confidence: 35,
-      reasoning: `PSAR flip ${psarFlip} terdeteksi tapi belum ada konfirmasi kedua (EMA3/7, StochRSI, atau Liquidity Sweep M3) — NO TRADE`,
+      reasoning: `PSAR flip ${effectivePsarFlip} terdeteksi tapi belum ada konfirmasi kedua (EMA3/7, StochRSI, atau Liquidity Sweep M3) — NO TRADE`,
       atr,
       checklist,
       blockReason: "PSAR flip tanpa konfirmasi kedua",
     };
   }
 
-  const direction = psarFlip;
+  const direction = primaryDirection;
 
   // Bonus scoring (informational, NOT gates): volume spike + ATR band rejection.
   const volAvg = volumes.slice(Math.max(0, last - 20), last).reduce((a, b) => a + b, 0) / Math.min(20, last || 1);
@@ -335,13 +373,16 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
   checklist.push({ label: "ATR Band (x1.0) Rejection Zone", pass: bandTouch });
 
   const confirmCount = [emaConfirms, stochConfirms, sweepConfirms].filter(Boolean).length;
-  let confidence = 62;
+  let confidence = triggerSource === "momentum" ? 68 : 62; // momentum trigger = already-realized move, slightly higher base
   if (confirmCount >= 2) confidence += 15; // 2+ of 3 confirmations aligned
   if (volumeSpike) confidence += 13;
   if (bandTouch) confidence += 10;
   confidence = Math.min(95, confidence);
 
-  const parts = [`PSAR flip ${direction}`, `trend M5 ${trendM5}`];
+  const parts =
+    triggerSource === "momentum"
+      ? [`Momentum breakout ${direction} (${momentum!.pipsMoved.toFixed(1)} pips/10min)`, `trend M5 ${trendM5}`]
+      : [`PSAR flip ${direction}`, `trend M5 ${trendM5}`];
   if (emaConfirms) parts.push("EMA3/7 cross confirm");
   if (stochConfirms) parts.push("StochRSI extreme-turn confirm");
   if (sweepConfirms) parts.push("Liquidity Sweep M3 confirm");
