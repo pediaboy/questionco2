@@ -6,10 +6,22 @@
  * Every number on this page comes from a live read of the actual auto-signal
  * engine (lib/institutionalEngine.ts) against real OKX candles, and real rows
  * from qco2_signals. Nothing here is randomly generated or hardcoded.
+ *
+ * v2 (2026-07-21) — Added 3 pure-WebSocket features (NO dummy data):
+ *   1. MULTI-ASSET TICKER  : 11 assets via Binance combined @ticker streams
+ *   2. ORDERBOOK PANEL     : btcusdt@depth20@100ms (asks/bids + depth bars)
+ *   3. RUNNING TRADE TAPE  : btcusdt@aggTrade (tick-by-tick time & sales)
+ * All three share ONE WebSocket (combined stream) buffered through useRef and
+ * flushed via requestAnimationFrame so hundreds of ticks/sec never freeze React.
+ * Endpoint: data-stream.binance.vision (Binance's official public market-data
+ * host — identical data to stream.binance.com but not geo-restricted).
+ * NOTE: XAU uses PAXGUSDT (tokenized gold, real market price). XAG has NO public
+ * WSS on Binance/OKX, so it is intentionally omitted rather than faked.
+ *
  * Dark Cyberpunk HUD — Next.js 14 + Tailwind CSS + Framer Motion + lucide-react
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import VipUpgradeModal from "@/components/VipUpgradeModal";
 import { SIGNAL_PAIRS } from "@/lib/signalPairs";
@@ -26,6 +38,8 @@ import {
   Cpu,
   ScanLine,
   Lock,
+  Layers,
+  Zap,
 } from "lucide-react";
 
 const C = {
@@ -102,6 +116,461 @@ function GlitchText({ text }: { text: string }) {
         {text}
       </motion.span>
     </span>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  LIVE MARKET FEED HOOK — SINGLE COMBINED BINANCE WEBSOCKET, ZERO DUMMY     */
+/*  Buffers every tick in useRef, flushes to React state once per animation   */
+/*  frame (requestAnimationFrame) so 100s of ticks/sec never freeze the DOM.  */
+/* -------------------------------------------------------------------------- */
+
+const TICKER_ASSETS = [
+  { key: "BTCUSDT", label: "BTC" },
+  { key: "ETHUSDT", label: "ETH" },
+  { key: "SOLUSDT", label: "SOL" },
+  { key: "XRPUSDT", label: "XRP" },
+  { key: "ADAUSDT", label: "ADA" },
+  { key: "DOGEUSDT", label: "DOGE" },
+  { key: "DOTUSDT", label: "DOT" },
+  { key: "LINKUSDT", label: "LINK" },
+  { key: "AVAXUSDT", label: "AVAX" },
+  { key: "LTCUSDT", label: "LTC" },
+  { key: "PAXGUSDT", label: "XAU" }, // tokenized gold — real market price, XAG has no public WSS
+] as const;
+
+const DEPTH_SYMBOL = "btcusdt";
+const MAX_TAPE_ROWS = 25;
+
+interface LiveTick {
+  price: number;
+  pct: number;
+  dir: "up" | "down" | "flat";
+}
+
+interface BookState {
+  asks: [number, number][]; // [price, qty]
+  bids: [number, number][];
+  lastPrice: number;
+  lastDir: "up" | "down" | "flat";
+}
+
+interface TapeRow {
+  id: string;
+  t: number; // trade time ms
+  price: number;
+  qty: number;
+  buy: boolean; // taker side: true = aggressive BUY (green)
+}
+
+type FeedStatus = "connecting" | "online" | "offline";
+
+function useLiveMarketFeed() {
+  const [tickers, setTickers] = useState<Record<string, LiveTick>>({});
+  const [book, setBook] = useState<BookState | null>(null);
+  const [tape, setTape] = useState<TapeRow[]>([]);
+  const [status, setStatus] = useState<FeedStatus>("connecting");
+
+  // tick buffers — mutated freely by WS handler, read once per rAF
+  const tickerBuf = useRef<Record<string, LiveTick>>({});
+  const bookBuf = useRef<BookState | null>(null);
+  const tapeBuf = useRef<TapeRow[]>([]);
+  const lastPriceRef = useRef<number>(0);
+  const lastTickPrices = useRef<Record<string, number>>({});
+  const dirty = useRef(false);
+
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let retry = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let rafId = 0;
+    let dead = false;
+
+    /* ---- rAF flush loop: max 1 React commit per frame, no matter tick rate ---- */
+    const flush = () => {
+      if (dead) return;
+      if (dirty.current) {
+        dirty.current = false;
+        if (Object.keys(tickerBuf.current).length > 0) {
+          const patch = tickerBuf.current;
+          tickerBuf.current = {};
+          setTickers((prev) => ({ ...prev, ...patch }));
+        }
+        if (bookBuf.current) {
+          const b = bookBuf.current;
+          bookBuf.current = null;
+          setBook(b);
+        }
+        if (tapeBuf.current.length > 0) {
+          const rows = tapeBuf.current;
+          tapeBuf.current = [];
+          setTape((prev) => [...rows, ...prev].slice(0, MAX_TAPE_ROWS));
+        }
+      }
+      rafId = requestAnimationFrame(flush);
+    };
+    rafId = requestAnimationFrame(flush);
+
+    /* ---- single combined stream: 11 tickers + depth20@100ms + aggTrade ---- */
+    const streams = [
+      ...TICKER_ASSETS.map((a) => `${a.key.toLowerCase()}@ticker`),
+      `${DEPTH_SYMBOL}@depth20@100ms`,
+      `${DEPTH_SYMBOL}@aggTrade`,
+    ].join("/");
+    const url = `wss://data-stream.binance.vision/stream?streams=${streams}`;
+
+    const connect = () => {
+      if (dead) return;
+      setStatus((s) => (s === "online" ? s : "connecting"));
+      try {
+        ws = new WebSocket(url);
+      } catch {
+        schedule();
+        return;
+      }
+
+      ws.onopen = () => {
+        retry = 0;
+        setStatus("online");
+      };
+
+      ws.onmessage = (evt) => {
+        let frame: { stream?: string; data?: Record<string, unknown> };
+        try {
+          frame = JSON.parse(evt.data);
+        } catch {
+          return;
+        }
+        const stream = frame.stream || "";
+        const d = frame.data as Record<string, unknown> | undefined;
+        if (!d) return;
+
+        /* -- ticker tick -- */
+        if (stream.endsWith("@ticker")) {
+          const sym = d.s as string;
+          const price = Number.parseFloat(d.c as string);
+          const pct = Number.parseFloat(d.P as string);
+          const prev = lastTickPrices.current[sym] ?? price;
+          lastTickPrices.current[sym] = price;
+          tickerBuf.current[sym] = {
+            price,
+            pct,
+            dir: price > prev ? "up" : price < prev ? "down" : "flat",
+          };
+          dirty.current = true;
+          return;
+        }
+
+        /* -- partial book depth (20 levels @ 100ms) -- */
+        if (stream.includes("@depth20")) {
+          const rawAsks = (d.asks || d.a) as [string, string][];
+          const rawBids = (d.bids || d.b) as [string, string][];
+          if (!rawAsks || !rawBids) return;
+          bookBuf.current = {
+            asks: rawAsks.map((l) => [Number.parseFloat(l[0]), Number.parseFloat(l[1])] as [number, number]),
+            bids: rawBids.map((l) => [Number.parseFloat(l[0]), Number.parseFloat(l[1])] as [number, number]),
+            lastPrice: lastPriceRef.current,
+            lastDir: bookBuf.current?.lastDir ?? "flat",
+          };
+          dirty.current = true;
+          return;
+        }
+
+        /* -- aggregate trade tick (tape) -- */
+        if (stream.endsWith("@aggTrade")) {
+          const price = Number.parseFloat(d.p as string);
+          const qty = Number.parseFloat(d.q as string);
+          const prevLast = lastPriceRef.current;
+          lastPriceRef.current = price;
+          tapeBuf.current.unshift({
+            id: `${d.a}`,
+            t: d.T as number,
+            price,
+            qty,
+            buy: d.m === false, // m=false => buyer is taker => aggressive BUY
+          });
+          if (tapeBuf.current.length > MAX_TAPE_ROWS) tapeBuf.current.length = MAX_TAPE_ROWS;
+          // keep the orderbook mid-price fresh on every trade tick
+          if (bookBuf.current) {
+            bookBuf.current.lastPrice = price;
+            bookBuf.current.lastDir = price > prevLast ? "up" : price < prevLast ? "down" : bookBuf.current.lastDir;
+          } else {
+            bookBuf.current = {
+              asks: [],
+              bids: [],
+              lastPrice: price,
+              lastDir: price > prevLast ? "up" : price < prevLast ? "down" : "flat",
+            };
+          }
+          dirty.current = true;
+        }
+      };
+
+      ws.onerror = () => ws?.close();
+      ws.onclose = () => {
+        if (dead) return;
+        setStatus("offline");
+        schedule();
+      };
+    };
+
+    const schedule = () => {
+      if (dead) return;
+      const delay = Math.min(1000 * 2 ** retry, 10_000);
+      retry += 1;
+      reconnectTimer = setTimeout(connect, delay);
+    };
+
+    connect();
+
+    return () => {
+      dead = true;
+      cancelAnimationFrame(rafId);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ws?.close();
+    };
+  }, []);
+
+  return { tickers, book, tape, status };
+}
+
+/* number formatting helpers for live prices */
+function fmtPrice(n: number): string {
+  if (!Number.isFinite(n) || n === 0) return "—";
+  if (n >= 1000) return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (n >= 1) return n.toFixed(2);
+  return n.toFixed(4);
+}
+function fmtQty(n: number): string {
+  if (n >= 100) return n.toFixed(1);
+  if (n >= 1) return n.toFixed(3);
+  return n.toFixed(4);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  NEW 1. MULTI-ASSET TICKER — thin marquee, 11 real WSS tickers             */
+/* -------------------------------------------------------------------------- */
+
+function TickerItem({ label, tick }: { label: string; tick?: LiveTick }) {
+  const up = (tick?.pct ?? 0) >= 0;
+  const dirColor = !tick ? "#475569" : tick.dir === "up" ? C.green : tick.dir === "down" ? C.red : up ? C.green : C.red;
+  return (
+    <span className="inline-flex items-center gap-2 px-4 font-mono text-[10px]">
+      <span className="font-bold tracking-[0.2em]" style={{ color: C.cyan }}>{label}</span>
+      <span className="font-bold tabular-nums transition-colors duration-150" style={{ color: dirColor }}>
+        {tick ? fmtPrice(tick.price) : "SYNC..."}
+      </span>
+      {tick && (
+        <span className="tabular-nums" style={{ color: up ? C.green : C.red }}>
+          {up ? "▲" : "▼"}{up ? "+" : ""}{tick.pct.toFixed(2)}%
+        </span>
+      )}
+      <span className="text-slate-700">|</span>
+    </span>
+  );
+}
+
+function MultiAssetTicker({ tickers, status }: { tickers: Record<string, LiveTick>; status: FeedStatus }) {
+  const row = (
+    <>
+      {TICKER_ASSETS.map((a) => (
+        <TickerItem key={a.key} label={a.label} tick={tickers[a.key]} />
+      ))}
+    </>
+  );
+  return (
+    <div
+      className="relative flex items-center overflow-hidden border-y py-1.5"
+      style={{ borderColor: C.iron, backgroundColor: "rgba(17,21,32,0.65)" }}
+    >
+      {/* fixed status chip */}
+      <span
+        className="z-10 flex shrink-0 items-center gap-1.5 border-r pl-2 pr-3 font-mono text-[8.5px] tracking-[0.2em]"
+        style={{ borderColor: C.iron, backgroundColor: "rgba(17,21,32,0.9)" }}
+      >
+        <motion.span
+          className="h-1.5 w-1.5"
+          style={{
+            backgroundColor: status === "online" ? C.green : status === "connecting" ? C.gold : C.red,
+            boxShadow: `0 0 6px ${status === "online" ? C.green : status === "connecting" ? C.gold : C.red}`,
+          }}
+          animate={{ opacity: [1, 0.3, 1] }}
+          transition={{ duration: 1.2, repeat: Infinity }}
+        />
+        <span className="text-slate-500">WSS {status.toUpperCase()}</span>
+      </span>
+
+      {/* infinite marquee — content duplicated, translated -50% */}
+      <div className="relative flex-1 overflow-hidden">
+        <motion.div
+          className="flex w-max whitespace-nowrap"
+          animate={{ x: ["0%", "-50%"] }}
+          transition={{ duration: 38, repeat: Infinity, ease: "linear" }}
+        >
+          <div className="flex">{row}</div>
+          <div className="flex" aria-hidden="true">{row}</div>
+        </motion.div>
+        {/* edge fades */}
+        <div className="pointer-events-none absolute inset-y-0 left-0 w-8" style={{ background: `linear-gradient(90deg, ${C.bg}, transparent)` }} />
+        <div className="pointer-events-none absolute inset-y-0 right-0 w-8" style={{ background: `linear-gradient(270deg, ${C.bg}, transparent)` }} />
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  NEW 2. ORDERBOOK (MARKET DEPTH) — btcusdt@depth20@100ms                   */
+/* -------------------------------------------------------------------------- */
+
+const BOOK_LEVELS = 9; // rows shown per side, keeps panel compact
+
+function DepthRow({ price, qty, maxQty, side }: { price: number; qty: number; maxQty: number; side: "ask" | "bid" }) {
+  const col = side === "ask" ? C.red : C.green;
+  const w = maxQty > 0 ? Math.min(100, (qty / maxQty) * 100) : 0;
+  return (
+    <div className="relative grid grid-cols-2 px-3 py-[2.5px] font-mono text-[10px] tabular-nums leading-none">
+      {/* real-time depth bar */}
+      <div
+        className="absolute inset-y-0 right-0 transition-[width] duration-100 ease-linear"
+        style={{ width: `${w}%`, backgroundColor: `${col}14` }}
+      />
+      <span className="relative z-10" style={{ color: col }}>{fmtPrice(price)}</span>
+      <span className="relative z-10 text-right text-slate-400">{fmtQty(qty)}</span>
+    </div>
+  );
+}
+
+function OrderbookPanel({ book, status }: { book: BookState | null; status: FeedStatus }) {
+  const asks = (book?.asks || []).slice(0, BOOK_LEVELS).reverse(); // lowest ask nearest to mid
+  const bids = (book?.bids || []).slice(0, BOOK_LEVELS);
+  const maxQty = Math.max(1e-9, ...asks.map((l) => l[1]), ...bids.map((l) => l[1]));
+  const lastColor = book?.lastDir === "up" ? C.green : book?.lastDir === "down" ? C.red : C.cyan;
+
+  return (
+    <Panel size={12} className="h-full">
+      <CornerTicks />
+      <div className="flex h-full flex-col">
+        <div className="flex items-center gap-2 border-b px-3 py-2" style={{ borderColor: C.iron }}>
+          <Layers size={13} style={{ color: C.cyan }} strokeWidth={1.6} />
+          <span className="font-mono text-[9.5px] font-bold uppercase tracking-[0.25em] text-slate-400">
+            ORDERBOOK <span className="text-slate-600">::</span> <span style={{ color: C.gold }}>BTCUSDT</span>
+          </span>
+          <span className="ml-auto font-mono text-[8px] tracking-[0.2em] text-slate-600">D20 @100MS</span>
+        </div>
+
+        <div className="grid grid-cols-2 border-b px-3 py-1 font-mono text-[8px] tracking-[0.25em] text-slate-600" style={{ borderColor: "rgba(30,41,59,0.5)" }}>
+          <span>PRICE (USDT)</span>
+          <span className="text-right">SIZE (BTC)</span>
+        </div>
+
+        {status !== "online" || !book || asks.length === 0 ? (
+          <div className="flex flex-1 items-center justify-center py-10 font-mono text-[9px] tracking-[0.2em] text-slate-600">
+            [ {status === "offline" ? "RECONNECTING DEPTH FEED..." : "SYNCING DEPTH..."} ]
+          </div>
+        ) : (
+          <>
+            {/* ASKS — red, above mid */}
+            <div className="flex flex-col-reverse">
+              {asks.map((l) => (
+                <DepthRow key={`a${l[0]}`} price={l[0]} qty={l[1]} maxQty={maxQty} side="ask" />
+              ))}
+            </div>
+
+            {/* LAST PRICE — blinking mid line */}
+            <div className="relative flex items-center justify-between border-y px-3 py-1.5" style={{ borderColor: C.iron, backgroundColor: "rgba(5,8,15,0.6)" }}>
+              <motion.span
+                key={book.lastPrice} // re-mounts each tick => blink
+                initial={{ opacity: 0.35 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.25 }}
+                className="font-mono text-[13px] font-bold tabular-nums"
+                style={{ color: lastColor, textShadow: `0 0 12px ${lastColor}66` }}
+              >
+                {book.lastPrice > 0 ? fmtPrice(book.lastPrice) : "—"}
+              </motion.span>
+              <span className="flex items-center gap-1 font-mono text-[8px] tracking-[0.2em]" style={{ color: lastColor }}>
+                {book.lastDir === "up" ? <TrendingUp size={10} strokeWidth={2} /> : book.lastDir === "down" ? <TrendingDown size={10} strokeWidth={2} /> : null}
+                LAST
+              </span>
+            </div>
+
+            {/* BIDS — green, below mid */}
+            <div className="flex flex-col">
+              {bids.map((l) => (
+                <DepthRow key={`b${l[0]}`} price={l[0]} qty={l[1]} maxQty={maxQty} side="bid" />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  NEW 3. RUNNING TRADE (TIME & SALES / TAPE) — btcusdt@aggTrade             */
+/* -------------------------------------------------------------------------- */
+
+function fmtTapeTime(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number, l = 2) => String(n).padStart(l, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
+function RunningTradePanel({ tape, status }: { tape: TapeRow[]; status: FeedStatus }) {
+  return (
+    <Panel size={12} glowColor={C.gold} className="h-full">
+      <CornerTicks color={C.gold} />
+      <div className="flex h-full flex-col">
+        <div className="flex items-center gap-2 border-b px-3 py-2" style={{ borderColor: C.iron }}>
+          <Zap size={13} style={{ color: C.gold }} strokeWidth={1.6} />
+          <span className="font-mono text-[9.5px] font-bold uppercase tracking-[0.25em] text-slate-400">
+            RUNNING TRADE <span className="text-slate-600">::</span> <span style={{ color: C.gold }}>TAPE</span>
+          </span>
+          <span className="ml-auto flex items-center gap-1.5 font-mono text-[8px] tracking-[0.2em] text-slate-600">
+            <motion.span
+              className="h-1 w-1"
+              style={{ backgroundColor: status === "online" ? C.green : C.red }}
+              animate={{ opacity: [1, 0.3, 1] }}
+              transition={{ duration: 0.8, repeat: Infinity }}
+            />
+            TICK FEED
+          </span>
+        </div>
+
+        <div className="grid grid-cols-[1fr_auto_auto] gap-2 border-b px-3 py-1 font-mono text-[8px] tracking-[0.25em] text-slate-600" style={{ borderColor: "rgba(30,41,59,0.5)" }}>
+          <span>TIME</span>
+          <span className="text-right">PRICE</span>
+          <span className="w-14 text-right">SIZE</span>
+        </div>
+
+        <div className="min-h-[220px] flex-1 overflow-hidden">
+          {tape.length === 0 ? (
+            <div className="flex h-full items-center justify-center font-mono text-[9px] tracking-[0.2em] text-slate-600">
+              [ AWAITING FIRST TICK... ]
+            </div>
+          ) : (
+            tape.map((tr, i) => {
+              const col = tr.buy ? C.green : C.red;
+              return (
+                <div
+                  key={tr.id}
+                  className="grid grid-cols-[1fr_auto_auto] gap-2 px-3 py-[2.5px] font-mono text-[10px] tabular-nums leading-none"
+                  style={{
+                    opacity: Math.max(0.25, 1 - i * 0.035),
+                    backgroundColor: i === 0 ? `${col}0D` : "transparent",
+                  }}
+                >
+                  <span className="text-slate-500">{fmtTapeTime(tr.t)}</span>
+                  <span className="text-right font-bold" style={{ color: col }}>{fmtPrice(tr.price)}</span>
+                  <span className="w-14 text-right text-slate-400">{fmtQty(tr.qty)}</span>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -701,6 +1170,7 @@ function SignalLog({ signals }: { signals: SignalRow[] }) {
 
 /* -------------------------------------------------------------------------- */
 /*  PAGE — polls /api/pending-status every 5s (real backend, house SWR rule)   */
+/*  + zero-delay WebSocket cockpit: ticker marquee, orderbook, running trade   */
 /* -------------------------------------------------------------------------- */
 
 export default function PendingPage() {
@@ -709,6 +1179,9 @@ export default function PendingPage() {
   const [gateOpen, setGateOpen] = useState(false);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [flash, setFlash] = useState(false);
+
+  // live WSS feed (tickers + orderbook + tape) — independent of the 5s API poll
+  const { tickers, book, tape, status: feedStatus } = useLiveMarketFeed();
 
   useEffect(() => {
     let mounted = true;
@@ -735,7 +1208,7 @@ export default function PendingPage() {
 
   return (
     <main className="relative min-h-screen w-full px-4 py-8 md:px-8" style={{ backgroundColor: C.bg }}>
-      <div className={`mx-auto flex w-full max-w-4xl flex-col gap-5 ${isVip ? "" : "blur-md select-none pointer-events-none"}`}>
+      <div className={`mx-auto flex w-full max-w-6xl flex-col gap-5 ${isVip ? "" : "blur-md select-none pointer-events-none"}`}>
         <motion.header initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center border" style={{ ...chamferMicro(6), borderColor: C.cyan + "66", backgroundColor: C.cyan + "11" }}>
@@ -757,26 +1230,46 @@ export default function PendingPage() {
           </div>
         </motion.header>
 
+        {/* NEW :: MULTI-ASSET TICKER MARQUEE — 11 assets, real WSS ticks */}
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.05, duration: 0.5 }}>
+          <MultiAssetTicker tickers={tickers} status={feedStatus} />
+        </motion.div>
+
         {!data ? (
           <div className="py-16 text-center font-mono text-[11px] tracking-[0.2em] text-slate-600">[ MENYAMBUNGKAN KE ENGINE... ]</div>
         ) : (
-          <>
-            <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.5 }} aria-label="Pending Pipeline">
-              <PendingPipelineList pipeline={data.pipeline} />
-            </motion.section>
+          /* COCKPIT GRID :: engine panels (left, wide) + market microstructure (right, narrow) */
+          <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+            {/* LEFT COLUMN — all existing engine features, untouched */}
+            <div className="flex min-w-0 flex-col gap-5">
+              <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.5 }} aria-label="Pending Pipeline">
+                <PendingPipelineList pipeline={data.pipeline} />
+              </motion.section>
 
-            <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2, duration: 0.5 }} aria-label="AI Engine Terminal Log">
-              <EngineTerminalLog logs={data.logs} pairs={SIGNAL_PAIR_LABELS} />
-            </motion.section>
+              <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2, duration: 0.5 }} aria-label="AI Engine Terminal Log">
+                <EngineTerminalLog logs={data.logs} pairs={SIGNAL_PAIR_LABELS} />
+              </motion.section>
 
-            <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3, duration: 0.5 }} aria-label="Live Market Chart">
-              <LiveMarketGrid charts={data.charts} pipeline={data.pipeline} />
-            </motion.section>
+              <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3, duration: 0.5 }} aria-label="Live Market Chart">
+                <LiveMarketGrid charts={data.charts} pipeline={data.pipeline} />
+              </motion.section>
 
-            <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4, duration: 0.5 }} aria-label="Signal Log History">
-              <SignalLog signals={data.signals} />
-            </motion.section>
-          </>
+              <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4, duration: 0.5 }} aria-label="Signal Log History">
+                <SignalLog signals={data.signals} />
+              </motion.section>
+            </div>
+
+            {/* RIGHT COLUMN — NEW zero-delay market microstructure (sticky on desktop) */}
+            <div className="flex min-w-0 flex-col gap-5 xl:sticky xl:top-4">
+              <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25, duration: 0.5 }} aria-label="Orderbook Market Depth">
+                <OrderbookPanel book={book} status={feedStatus} />
+              </motion.section>
+
+              <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35, duration: 0.5 }} aria-label="Running Trade Tape">
+                <RunningTradePanel tape={tape} status={feedStatus} />
+              </motion.section>
+            </div>
+          </div>
         )}
 
         <footer className="flex items-center justify-between font-mono text-[8.5px] tracking-[0.25em] text-slate-700">
