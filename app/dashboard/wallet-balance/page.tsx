@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
-import { C, Panel, CornerTicks, VipGateOverlay } from "@/lib/cyberKit";
+import { C, Panel, CornerTicks, VipGateOverlay, ZeroDummyDisclosure } from "@/lib/cyberKit";
 import VipUpgradeModal from "@/components/VipUpgradeModal";
 import {
   Coins,
@@ -14,7 +14,6 @@ import {
   RefreshCw,
   Terminal,
   Zap,
-  Info,
   TrendingUp,
   TrendingDown,
 } from "lucide-react";
@@ -152,18 +151,7 @@ export default function WalletBalancePage() {
                   </div>
 
                   {/* Clarifying Disclaimer Caption (CRITICAL - site zero-dummy policy) */}
-                  <div className="border border-cyan-500/20 bg-cyan-950/10 p-4 font-mono text-[9px] leading-relaxed uppercase tracking-wider text-cyan-400/80 space-y-2">
-                    <div className="flex items-center gap-1.5 text-cyan-300 font-bold">
-                      <Info size={12} className="shrink-0" />
-                      <span>[ SPESIFIKASI METRIK DOMPET ]</span>
-                    </div>
-                    <p>
-                      Situs LASTQUESTION.CO murni merupakan layanan penyedia sinyal & edukasi. Angka di atas mewakili volume total &apos;Lot Kontes&apos; yang berhasil dikumpulkan oleh akun trading terafiliasi Anda untuk kualifikasi hadiah kontes capai lot.
-                    </p>
-                    <p className="text-yellow-400/90 font-semibold border-t border-cyan-500/10 pt-1.5">
-                      * INI BUKAN SALDO FINANSIAL ATAU AKUN PERTUKARAN MONETER. NILAI DI ATAS TIDAK DAPAT DITARIK SECARA TUNAI SECARA LANGSUNG KARENA BUKAN MERUPAKAN DANA DEPOSIT.
-                    </p>
-                  </div>
+                  <ZeroDummyDisclosure />
                 </div>
 
                 {/* Cyber HUD decorative status bar */}

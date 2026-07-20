@@ -234,17 +234,17 @@ export default function LiquidityHeatmapPage() {
             const lastPrice = sliceBids[0] && sliceAsks[0] ? (sliceBids[0][0] + sliceAsks[0][0]) / 2 : 0;
 
             return (
-              <Panel key={asset.key} glowColor={C.cyan} size={12} className="flex flex-col p-4">
+              <Panel key={asset.key} glowColor={C.cyan} size={12} contentClassName="flex flex-col p-4">
                 <CornerTicks color={C.cyan} />
                 
                 {/* Panel Header */}
-                <div className="mb-4 flex items-center justify-between font-mono">
-                  <div className="flex flex-col">
-                    <span className="text-xs font-bold tracking-wider text-white">{asset.label}</span>
+                <div className="mb-4 flex items-center justify-between font-mono min-w-0">
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-xs font-bold tracking-wider text-white min-w-0 break-words">{asset.label}</span>
                     <span className="text-[8px] tracking-widest text-slate-500">BINANCE PUBLIC ORDER DEPTH</span>
                   </div>
-                  <div className="text-right">
-                    <span className="text-xs font-bold tracking-wider" style={{ color: C.cyan }}>
+                  <div className="text-right min-w-0">
+                    <span className="text-xs font-bold tracking-wider min-w-0 break-words" style={{ color: C.cyan }}>
                       ${fmtPrice(lastPrice)}
                     </span>
                     <div className="text-[8px] tracking-widest text-slate-500">MID PRICE</div>
@@ -337,15 +337,15 @@ export default function LiquidityHeatmapPage() {
                   </div>
                   
                   {/* Top Ask (best depth block) */}
-                  <div className="flex justify-between text-red-400">
-                    <span>ASK [Jual] ${fmtPrice(sliceAsks[0]?.[0] || 0)}</span>
-                    <span className="font-bold text-slate-300">{fmtQty(sliceAsks[0]?.[1] || 0)}</span>
+                  <div className="flex justify-between text-red-400 min-w-0">
+                    <span className="min-w-0 break-words">ASK [Jual] ${fmtPrice(sliceAsks[0]?.[0] || 0)}</span>
+                    <span className="font-bold text-slate-300 min-w-0 break-words">{fmtQty(sliceAsks[0]?.[1] || 0)}</span>
                   </div>
 
                   {/* Top Bid (best depth block) */}
-                  <div className="flex justify-between text-emerald-400">
-                    <span>BID [Beli] ${fmtPrice(sliceBids[0]?.[0] || 0)}</span>
-                    <span className="font-bold text-slate-300">{fmtQty(sliceBids[0]?.[1] || 0)}</span>
+                  <div className="flex justify-between text-emerald-400 min-w-0">
+                    <span className="min-w-0 break-words">BID [Beli] ${fmtPrice(sliceBids[0]?.[0] || 0)}</span>
+                    <span className="font-bold text-slate-300 min-w-0 break-words">{fmtQty(sliceBids[0]?.[1] || 0)}</span>
                   </div>
                 </div>
               </Panel>
@@ -356,16 +356,16 @@ export default function LiquidityHeatmapPage() {
         {/* Active Tooltip Widget */}
         <div className="h-10 mt-2">
           {hoveredLevel ? (
-            <div className="flex items-center gap-3 font-mono text-[10px] text-slate-400 border border-slate-800/40 p-2 bg-black/40 rounded">
-              <span className="text-white font-bold">{hoveredLevel.asset}</span>
+            <div className="flex items-center gap-3 font-mono text-[10px] text-slate-400 border border-slate-800/40 p-2 bg-black/40 rounded min-w-0">
+              <span className="text-white font-bold min-w-0 break-words">{hoveredLevel.asset}</span>
               <span>•</span>
-              <span>Tipe: <span style={{ color: hoveredLevel.type === "bid" ? C.cyan : C.gold }} className="font-bold uppercase">{hoveredLevel.type === "bid" ? "Beli (Bid)" : "Jual (Ask)"}</span></span>
+              <span className="min-w-0 break-words">Tipe: <span style={{ color: hoveredLevel.type === "bid" ? C.cyan : C.gold }} className="font-bold uppercase">{hoveredLevel.type === "bid" ? "Beli (Bid)" : "Jual (Ask)"}</span></span>
               <span>•</span>
-              <span>Harga: <span className="text-white font-bold">${fmtPrice(hoveredLevel.price)}</span></span>
+              <span className="min-w-0 break-words">Harga: <span className="text-white font-bold">${fmtPrice(hoveredLevel.price)}</span></span>
               <span>•</span>
-              <span>Volume: <span className="text-white font-bold">{fmtQty(hoveredLevel.qty)}</span></span>
+              <span className="min-w-0 break-words">Volume: <span className="text-white font-bold">{fmtQty(hoveredLevel.qty)}</span></span>
               <span>•</span>
-              <span>Kedalaman Relatif: <span className="text-white font-bold">{hoveredLevel.percent.toFixed(1)}%</span></span>
+              <span className="min-w-0 break-words">Kedalaman Relatif: <span className="text-white font-bold">{hoveredLevel.percent.toFixed(1)}%</span></span>
             </div>
           ) : (
             <div className="flex items-center justify-center font-mono text-[9px] text-slate-500 italic p-2 border border-dashed border-slate-900">

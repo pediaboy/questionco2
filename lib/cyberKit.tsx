@@ -11,6 +11,7 @@
  */
 
 import React from "react";
+import { ShieldAlert } from "lucide-react";
 
 export const C = {
   bg: "#05080F",
@@ -34,18 +35,26 @@ export function Panel({
   glowColor = C.cyan,
   size = 14,
   className = "",
+  contentClassName = "",
 }: {
   children: React.ReactNode;
   glowColor?: string;
   size?: number;
+  /** Sizing/grid-placement classes for the OUTER card box (w-full, h-full, h-64, etc). */
   className?: string;
+  /** Padding/flex-layout classes for the INNER content area (p-4, flex flex-col, justify-between, etc).
+   * IMPORTANT: content padding must go here, not in `className` -- `className` lands on the
+   * outer 1px gradient-border wrapper, not the actual content box, so padding passed via
+   * `className` does nothing to protect text from the absolutely-positioned CornerTicks
+   * corner brackets, causing text to visually overlap/get clipped by them. */
+  contentClassName?: string;
 }) {
   return (
     <div
       className={`relative p-px ${className}`}
       style={{ background: `linear-gradient(135deg, ${glowColor}55, ${C.iron} 30%, ${C.iron} 70%, ${glowColor}33)`, ...chamfer(size) }}
     >
-      <div className="relative h-full w-full" style={{ backgroundColor: C.card, ...chamfer(size - 1) }}>
+      <div className={`relative h-full w-full ${contentClassName}`} style={{ backgroundColor: C.card, ...chamfer(size - 1) }}>
         {children}
       </div>
     </div>
@@ -104,6 +113,38 @@ export function VipGateOverlay({ isVip, onUpgradeClick }: { isVip: boolean; onUp
       >
         Upgrade untuk Akses
       </button>
+    </div>
+  );
+}
+
+
+/* Standard "not a broker/exchange account" disclosure — use verbatim on every
+ * page that shows real member performance/contest/lot stats (Portfolio,
+ * Account Overview, Wallet Balance, etc). ONE canonical text + style so it
+ * never drifts into shouty ALL-CAPS placeholder-looking copy on some pages
+ * and readable prose on others. `min-w-0 break-words` guards against text
+ * overflow at browser zoom / narrow viewports. */
+export function ZeroDummyDisclosure({ className = "" }: { className?: string }) {
+  return (
+    <div
+      className={`min-w-0 border border-amber-500/20 bg-amber-500/5 p-4 ${className}`}
+      style={{ clipPath: "polygon(5px 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%, 0 5px)" }}
+    >
+      <div className="flex items-start gap-2.5 min-w-0">
+        <ShieldAlert className="text-amber-500 shrink-0 mt-0.5" size={16} />
+        <div className="min-w-0 space-y-1.5">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-amber-400 block">
+            PROTOKOL ZERO DUMMY DATA
+          </span>
+          <p className="font-sans text-[11px] text-amber-200/70 leading-relaxed break-words">
+            LASTQUESTION.CO mematuhi kebijakan ketat <strong>ZERO DUMMY DATA</strong>. Halaman ini adalah
+            representasi standing performa sinyal real serta keterlibatan kontes resmi Anda di platform
+            kami. Ini <strong>bukan</strong> akun broker, terminal margin, ataupun exchange wallet. Kami
+            tidak menampung saldo margin ataupun dana trading member. Semua parameter kinerja dikalkulasikan
+            secara transparan dari data nyata.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
-import { C, Panel, CornerTicks, VipGateOverlay } from "@/lib/cyberKit";
+import { C, Panel, CornerTicks, VipGateOverlay, ZeroDummyDisclosure } from "@/lib/cyberKit";
 import { CONTEST_TIERS, getNextTier, getProgressPercent } from "@/lib/contestTiers";
 import { 
   Trophy, 
@@ -13,7 +13,6 @@ import {
   BookOpen, 
   Award, 
   ArrowRight,
-  ShieldAlert,
   Layers,
   Percent,
   CheckCircle2
@@ -107,7 +106,7 @@ export default function PortfolioPage() {
           {/* Section: Performance & Standings Grid */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             {/* Stat: Win Rate */}
-            <Panel glowColor={C.cyan} className="p-4" size={10}>
+            <Panel glowColor={C.cyan} size={10} contentClassName="p-4">
               <CornerTicks color={C.cyan} />
               <div className="flex flex-col justify-between h-24">
                 <div className="flex items-center justify-between">
@@ -125,7 +124,7 @@ export default function PortfolioPage() {
             </Panel>
 
             {/* Stat: Net Profit Pips */}
-            <Panel glowColor={profitPips >= 0 ? C.green : C.red} className="p-4" size={10}>
+            <Panel glowColor={profitPips >= 0 ? C.green : C.red} size={10} contentClassName="p-4">
               <CornerTicks color={profitPips >= 0 ? C.green : C.red} />
               <div className="flex flex-col justify-between h-24">
                 <div className="flex items-center justify-between">
@@ -144,7 +143,7 @@ export default function PortfolioPage() {
             </Panel>
 
             {/* Stat: Documented Journal Entries */}
-            <Panel glowColor={C.gold} className="p-4" size={10}>
+            <Panel glowColor={C.gold} size={10} contentClassName="p-4">
               <CornerTicks color={C.gold} />
               <div className="flex flex-col justify-between h-24">
                 <div className="flex items-center justify-between">
@@ -164,7 +163,7 @@ export default function PortfolioPage() {
           </div>
 
           {/* Section: Contest Progression Milestone */}
-          <Panel glowColor={C.gold} className="p-5" size={12}>
+          <Panel glowColor={C.gold} size={12} contentClassName="p-5">
             <CornerTicks color={C.gold} />
             <div className="space-y-4">
               <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -281,17 +280,7 @@ export default function PortfolioPage() {
           </Panel>
 
           {/* Section: Disclaimers / Community standing policies */}
-          <div className="border border-amber-500/20 bg-amber-500/5 p-4 rounded" style={{ clipPath: "polygon(5px 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%, 0 5px)" }}>
-            <div className="flex items-start gap-2.5">
-              <ShieldAlert className="text-amber-500 shrink-0 mt-0.5" size={16} />
-              <div className="space-y-1.5">
-                <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-amber-400 block">PROKOL ZERO DUMMY DATA DISCLOSURE</span>
-                <p className="font-sans text-[11px] text-amber-200/70 leading-relaxed">
-                  LASTQUESTION.CO mematuhi kebijakan ketat <strong>ZERO DUMMY DATA</strong>. Halaman ini adalah representasi standing performa sinyal real serta keterlibatan kontes resmi Anda di platform kami. Ini <strong>bukan</strong> akun broker, terminal margin, ataupun exchange wallet. Kami tidak menampung saldo margin ataupun dana trading member. Semua parameter kinerja dikalkulasikan secara transparan dari data nyata.
-                </p>
-              </div>
-            </div>
-          </div>
+          <ZeroDummyDisclosure />
 
         </div>
 

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
-import { C, Panel, CornerTicks, VipGateOverlay } from "@/lib/cyberKit";
+import { C, Panel, CornerTicks, VipGateOverlay, ZeroDummyDisclosure } from "@/lib/cyberKit";
 import VipUpgradeModal from "@/components/VipUpgradeModal";
 import {
   User,
@@ -16,7 +16,6 @@ import {
   QrCode,
   Copy,
   ChevronRight,
-  ShieldCheck,
   Zap,
   RefreshCw,
   AlertTriangle,
@@ -256,13 +255,7 @@ export default function AccountOverviewPage() {
                 </div>
 
                 {/* Notice that this is not a brokerage */}
-                <div className="border border-cyan-500/20 bg-cyan-950/10 p-3.5 font-mono text-[9px] text-cyan-400/80 leading-relaxed uppercase tracking-wider">
-                  <div className="flex items-center gap-1.5 mb-1 text-cyan-300 font-bold">
-                    <ShieldCheck size={12} />
-                    <span>[ ZERO-DUMMY POLICY COMPLIANCE ]</span>
-                  </div>
-                  LASTQUESTION.CO TIDAK MENYIMPAN ATAU MENYINKRONKAN SALDO BROKER SECARA STATIS. HUD INI ADALAH TAMPILAN STATUS BERLANGGANAN AKSES ENGINE DAN DATA MANDIRI.
-                </div>
+                <ZeroDummyDisclosure />
               </div>
             </Panel>
 

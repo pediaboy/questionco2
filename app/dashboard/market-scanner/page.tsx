@@ -126,7 +126,7 @@ export default function MarketScannerPage() {
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {scannerData.length === 0 ? (
             Array.from({ length: 4 }).map((_, idx) => (
-              <Panel key={idx} glowColor={C.iron} size={12} className="h-48 flex flex-col p-4 justify-center items-center">
+              <Panel key={idx} glowColor={C.iron} size={12} className="h-48" contentClassName="flex flex-col p-4 justify-center items-center">
                 <CornerTicks color={C.iron} />
                 <div className="font-mono text-[10px] tracking-widest text-slate-600">
                   [ SCANNING ENGINE... ]
@@ -137,7 +137,7 @@ export default function MarketScannerPage() {
             scannerData.map((pair) => {
               if (pair.error) {
                 return (
-                  <Panel key={pair.key} glowColor={C.red} size={12} className="flex flex-col p-4 h-48 justify-between">
+                  <Panel key={pair.key} glowColor={C.red} size={12} className="h-48" contentClassName="flex flex-col p-4 justify-between">
                     <CornerTicks color={C.red} />
                     <div className="font-mono text-xs font-bold text-white">{pair.label}</div>
                     <div className="font-mono text-[10px] text-red-400 tracking-wider">
@@ -157,7 +157,7 @@ export default function MarketScannerPage() {
               const emaTrendColor = pair.currentEmaTrend === "up" ? C.green : pair.currentEmaTrend === "down" ? C.red : "white";
 
               return (
-                <Panel key={pair.key} glowColor={isBreakoutUp ? C.green : isBreakoutDown ? C.red : C.cyan} size={12} className="flex flex-col p-5 justify-between">
+                <Panel key={pair.key} glowColor={isBreakoutUp ? C.green : isBreakoutDown ? C.red : C.cyan} size={12} contentClassName="flex flex-col p-5 justify-between">
                   <CornerTicks color={isBreakoutUp ? C.green : isBreakoutDown ? C.red : C.cyan} />
                   
                   {/* Pair Name */}
