@@ -3,10 +3,8 @@
 import React, { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import Header from "@/components/Header";
-import Footer from "@/components/Footer";
+import { useMemberAuth } from "@/lib/MemberAuthContext";
 import { TrendingUp, TrendingDown, Lock, ArrowLeft, Cpu } from "lucide-react";
-import { supabase } from "@/lib/supabaseClient";
 
 interface SignalFull {
   id: string;
@@ -40,6 +38,7 @@ interface EngineLog {
 function DetailsInner() {
   const params = useSearchParams();
   const id = params.get("id");
+  const { accessToken } = useMemberAuth();
   const [signal, setSignal] = useState<SignalFull | null>(null);
   const [logs, setLogs] = useState<EngineLog[]>([]);
   const [locked, setLocked] = useState(false);
@@ -48,10 +47,8 @@ function DetailsInner() {
   useEffect(() => {
     if (!id) return;
     (async () => {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token || null;
       const res = await fetch(`/api/signal-details?id=${id}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
       }).then((r) => r.json());
       if (res.success) {
         setLocked(!!res.locked);
@@ -60,7 +57,7 @@ function DetailsInner() {
       }
       setLoading(false);
     })();
-  }, [id]);
+  }, [id, accessToken]);
 
   if (loading) {
     return <div className="py-20 text-center text-white/30 text-xs font-mono">[ MEMUAT DETAIL SINYAL... ]</div>;
@@ -78,7 +75,7 @@ function DetailsInner() {
           {signal.pair} — {signal.direction}
         </p>
         <p className="text-white/40 text-xs mb-4">Detail lengkap sinyal ini khusus member VIP.</p>
-        <Link href="/vip" className="text-cyan-300 text-xs underline">
+        <Link href="/dashboard/upgrade" className="text-cyan-300 text-xs underline">
           Upgrade ke VIP
         </Link>
       </div>
@@ -87,7 +84,7 @@ function DetailsInner() {
 
   return (
     <div>
-      <Link href="/signal-history" className="text-white/40 hover:text-cyan-300 flex items-center gap-1.5 text-xs mb-6">
+      <Link href="/dashboard/signal-history" className="text-white/40 hover:text-cyan-300 flex items-center gap-1.5 text-xs mb-6">
         <ArrowLeft size={13} /> Kembali ke Riwayat
       </Link>
 
@@ -185,14 +182,8 @@ function DetailsInner() {
 
 export default function SignalDetailsPage() {
   return (
-    <div className="min-h-screen bg-[#030712]">
-      <Header />
-      <main className="max-w-3xl mx-auto px-5 py-10">
-        <Suspense fallback={<div className="py-20 text-center text-white/30 text-xs font-mono">[ MEMUAT... ]</div>}>
-          <DetailsInner />
-        </Suspense>
-      </main>
-      <Footer />
-    </div>
+    <Suspense fallback={<div className="py-20 text-center text-white/30 text-xs font-mono">[ MEMUAT... ]</div>}>
+      <DetailsInner />
+    </Suspense>
   );
 }

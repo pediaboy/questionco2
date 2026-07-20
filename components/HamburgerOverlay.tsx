@@ -11,7 +11,6 @@ import {
   Mail,
   Signal,
   TrendingUp,
-  History,
   BarChart3,
   Activity,
   DollarSign,
@@ -56,7 +55,6 @@ const GROUPS: { title: string; items: MenuItem[] }[] = [
     title: "SINYAL & DATA",
     items: [
       { label: "Sinyal", href: "/signals", icon: Signal },
-      { label: "Riwayat Sinyal", href: "/signal-history", icon: History },
       { label: "Performance", href: "/performance", icon: TrendingUp },
       { label: "Analytics", href: "/analytics", icon: BarChart3 },
       { label: "Status Sistem", href: "/status", icon: Activity },
