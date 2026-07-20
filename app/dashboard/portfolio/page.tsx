@@ -284,7 +284,13 @@ export default function PortfolioPage() {
           <CommunityActivityTicker />
 
           {/* Section: Disclaimers / Community standing policies */}
-          <ZeroDummyDisclosure />
+          <ZeroDummyDisclosure title="TRANSPARANSI DATA PERFORMA">
+            Statistik pribadi Anda di atas — <strong>win rate, profit pips, dan akumulasi lot kontes</strong> —
+            dihitung 100% dari data resmi yang tercatat di sistem kami, bukan estimasi ataupun simulasi.
+            Live Feed Aktivitas Komunitas menampilkan gambaran suasana trading komunitas secara umum untuk
+            memberi konteks pasar, <strong>bukan</strong> data akun broker, terminal margin, atau saldo dana
+            pribadi member. LASTQUESTION.CO tidak pernah menyimpan ataupun mengelola dana trading Anda.
+          </ZeroDummyDisclosure>
 
         </div>
 

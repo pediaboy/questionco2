@@ -15,48 +15,79 @@ interface FeedRow {
   secondsAgo: number;
 }
 
+const MAX_ROWS = 7;
+
 /**
- * Ambient "Live Community Activity" ticker for the Portfolio page.
+ * Ambient "Live Feed Aktivitas Komunitas" ticker for the Portfolio page.
  * Source: ONLY the existing is_dummy=true demo roster (dummy1-15@leaderboard.local,
  * the same accounts already used for the "Kontes Capai Lot" leaderboard auto-growth)
  * via /api/public/dummy-activity -- never real member data. Modal/lot/pair shown
  * are generated fresh server-side each poll purely for a "live" cosmetic feel;
  * nothing here is persisted or can affect the real contest standings.
+ *
+ * Runs as a "running trade" feed: ONE fresh trade is pushed onto the top every
+ * ~2.5s and the oldest falls off the bottom -- not a full-list replace, which is
+ * what caused the jarring "jump" the owner reported.
  */
 export default function CommunityActivityTicker() {
   const [rows, setRows] = useState<FeedRow[]>([]);
   const [flash, setFlash] = useState(false);
   const seqRef = useRef(0);
 
-  const pull = async () => {
+  const pushOne = async () => {
     try {
-      const res = await fetch("/api/public/dummy-activity", { cache: "no-store" });
+      const res = await fetch("/api/public/dummy-activity?count=1", { cache: "no-store" });
       const d = await res.json();
       if (d.success && Array.isArray(d.items) && d.items.length > 0) {
         seqRef.current += 1;
-        const seq = seqRef.current;
-        const fresh: FeedRow[] = d.items.map((it: Omit<FeedRow, "secondsAgo" | "id">, i: number) => ({
-          ...it,
-          id: `${seq}-${i}`,
-          secondsAgo: 0,
-        }));
-        setRows(fresh);
+        const it = d.items[0];
+        const row: FeedRow = { ...it, id: `${seqRef.current}-${it.id}`, secondsAgo: 0 };
+        setRows((prev) => [row, ...prev].slice(0, MAX_ROWS));
         setFlash(true);
         setTimeout(() => setFlash(false), 400);
       }
     } catch {
-      // silently keep showing the last known rows if a poll fails
+      // silently skip this tick if the poll fails -- keep showing the existing rows
+    }
+  };
+
+  const seed = async () => {
+    try {
+      const res = await fetch("/api/public/dummy-activity?count=" + MAX_ROWS, { cache: "no-store" });
+      const d = await res.json();
+      if (d.success && Array.isArray(d.items)) {
+        seqRef.current += 1;
+        const seq = seqRef.current;
+        setRows(d.items.map((it: Omit<FeedRow, "secondsAgo" | "id"> & { id: string }, i: number) => ({
+          ...it,
+          id: `${seq}-${it.id}-${i}`,
+          secondsAgo: i * 3,
+        })));
+      }
+    } catch {
+      // keep rows empty; the tick interval below will still try to populate it
     }
   };
 
   useEffect(() => {
-    pull();
-    const pollIv = setInterval(pull, 4000); // fresh dummy-account activity every 4s
+    seed();
+    // stagger the "new trade" ticks a bit (2-3.5s) so it doesn't feel mechanically uniform
+    let tradeTimer: ReturnType<typeof setTimeout>;
+    const scheduleNext = () => {
+      const delay = 2000 + Math.random() * 1500;
+      tradeTimer = setTimeout(async () => {
+        await pushOne();
+        scheduleNext();
+      }, delay);
+    };
+    scheduleNext();
+
     const secondIv = setInterval(() => {
       setRows((prev) => prev.map((r) => ({ ...r, secondsAgo: r.secondsAgo + 1 })));
-    }, 1000); // local "Xs lalu" ticking every second, per the owner's "update tiap detik" ask
+    }, 1000);
+
     return () => {
-      clearInterval(pollIv);
+      clearTimeout(tradeTimer);
       clearInterval(secondIv);
     };
   }, []);
@@ -89,10 +120,10 @@ export default function CommunityActivityTicker() {
               <motion.div
                 key={row.id}
                 layout
-                initial={{ opacity: 0, y: -8 }}
+                initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.3 }}
+                exit={{ opacity: 0, y: 10 }}
+                transition={{ duration: 0.35, ease: "easeOut" }}
                 className="flex items-center justify-between gap-2 py-2 font-mono text-[10.5px]"
               >
                 <div className="flex min-w-0 items-center gap-2">

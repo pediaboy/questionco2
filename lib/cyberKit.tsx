@@ -152,7 +152,15 @@ export function VipGateOverlay({ isVip, onUpgradeClick }: { isVip: boolean; onUp
  * never drifts into shouty ALL-CAPS placeholder-looking copy on some pages
  * and readable prose on others. `min-w-0 break-words` guards against text
  * overflow at browser zoom / narrow viewports. */
-export function ZeroDummyDisclosure({ className = "" }: { className?: string }) {
+export function ZeroDummyDisclosure({
+  className = "",
+  title = "PROTOKOL ZERO DUMMY DATA",
+  children,
+}: {
+  className?: string;
+  title?: string;
+  children?: React.ReactNode;
+}) {
   return (
     <div
       className={`min-w-0 border border-amber-500/20 bg-amber-500/5 p-4 ${className}`}
@@ -162,14 +170,18 @@ export function ZeroDummyDisclosure({ className = "" }: { className?: string }) 
         <ShieldAlert className="text-amber-500 shrink-0 mt-0.5" size={16} />
         <div className="min-w-0 space-y-1.5">
           <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-amber-400 block">
-            PROTOKOL ZERO DUMMY DATA
+            {title}
           </span>
           <p className="font-sans text-[11px] text-amber-200/70 leading-relaxed break-words">
-            LASTQUESTION.CO mematuhi kebijakan ketat <strong>ZERO DUMMY DATA</strong>. Halaman ini adalah
-            representasi standing performa sinyal real serta keterlibatan kontes resmi Anda di platform
-            kami. Ini <strong>bukan</strong> akun broker, terminal margin, ataupun exchange wallet. Kami
-            tidak menampung saldo margin ataupun dana trading member. Semua parameter kinerja dikalkulasikan
-            secara transparan dari data nyata.
+            {children ?? (
+              <>
+                LASTQUESTION.CO mematuhi kebijakan ketat <strong>ZERO DUMMY DATA</strong>. Halaman ini adalah
+                representasi standing performa sinyal real serta keterlibatan kontes resmi Anda di platform
+                kami. Ini <strong>bukan</strong> akun broker, terminal margin, ataupun exchange wallet. Kami
+                tidak menampung saldo margin ataupun dana trading member. Semua parameter kinerja dikalkulasikan
+                secara transparan dari data nyata.
+              </>
+            )}
           </p>
         </div>
       </div>
