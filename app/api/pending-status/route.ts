@@ -11,14 +11,20 @@ export async function GET() {
   try {
     const admin = getSupabaseAdmin();
 
-    const [pipeline, signalsRes] = await Promise.all([
+    const [pipeline, signalsRes, logsRes] = await Promise.all([
       getLiveEngineStatus(),
       admin
         .from("qco2_signals")
         .select("id, pair, direction, entry, take_profit, status, hit_level, created_at, source")
         .order("created_at", { ascending: false })
         .limit(8),
+      admin
+        .from("qco2_engine_logs")
+        .select("id, pair, action, confidence, direction, reasoning, created_at")
+        .order("created_at", { ascending: false })
+        .limit(40),
     ]);
+    const logs = (logsRes.data || []).slice().reverse(); // chronological order for the terminal feed
 
     // Pick the pair the engine is currently most interested in (highest live confidence)
     const target = [...pipeline].sort((a, b) => b.confidence - a.confidence)[0] || pipeline[0];
@@ -46,6 +52,7 @@ export async function GET() {
       target: target?.pair || null,
       chart: { candles: m15, ema9, ema21 },
       signals: signalsRes.data || [],
+      logs,
     });
   } catch (err) {
     return NextResponse.json({ success: false, error: (err as Error).message }, { status: 500 });

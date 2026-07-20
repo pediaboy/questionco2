@@ -10,6 +10,8 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
+import { useMemberAuth } from "@/lib/MemberAuthContext";
+import VipUpgradeModal from "@/components/VipUpgradeModal";
 import { motion } from "framer-motion";
 import {
   Database,
@@ -22,6 +24,7 @@ import {
   Terminal,
   Cpu,
   ScanLine,
+  Lock,
 } from "lucide-react";
 
 const C = {
@@ -134,6 +137,7 @@ interface ApiResponse {
   target: string | null;
   chart: { candles: { o: number; h: number; l: number; c: number }[]; ema9: number[]; ema21: number[] };
   signals: SignalRow[];
+  logs: EngineLogRow[];
 }
 
 const PIPELINE_STAGES = [
@@ -199,16 +203,25 @@ function DashedConnector({ active }: { active: boolean }) {
 }
 
 /* Cycles through the 4 REAL pairs, showing each one's real live stage/confidence */
-function AIPipeline({ pipeline }: { pipeline: PairLiveStatus[] }) {
-  const [idx, setIdx] = useState(0);
-  useEffect(() => {
-    if (pipeline.length === 0) return;
-    const iv = setInterval(() => setIdx((i) => (i + 1) % pipeline.length), 3200);
-    return () => clearInterval(iv);
-  }, [pipeline.length]);
+function timeAgo(iso: string): string {
+  const secs = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h`;
+}
 
-  const current = pipeline[idx];
-  const activeStage = current ? stageIndex(current.stage) : 0;
+/* Real list of all 4 pairs the engine is currently evaluating, each with its live
+   confidence build-up toward CONFIDENCE_MIN -- replaces the old single-pair-cycling
+   "processing flow" panel with a genuine multi-row pipeline view (2026-07-20). */
+function PendingPipelineList({ pipeline }: { pipeline: PairLiveStatus[] }) {
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => forceTick((n) => n + 1), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const sorted = [...pipeline].sort((a, b) => b.confidence - a.confidence);
 
   return (
     <Panel size={14}>
@@ -218,60 +231,114 @@ function AIPipeline({ pipeline }: { pipeline: PairLiveStatus[] }) {
           <div className="flex items-center gap-2">
             <Cpu size={14} style={{ color: C.cyan }} strokeWidth={1.6} />
             <span className="font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">
-              AI PROCESSING FLOW <span className="text-slate-600">::</span>{" "}
-              <span style={{ color: C.gold }}>{current?.pair || "..."}</span>
+              PENDING PIPELINE
             </span>
           </div>
-          <GlitchText
-            text={
-              current
-                ? current.confidence >= 76
-                  ? "SETUP CONFIRMED"
-                  : `CONFIDENCE ${current.confidence}% :: HUNTING`
-                : "LOADING..."
-            }
-          />
+          <span className="font-mono text-[9px] tracking-[0.25em] text-slate-600">{sorted.length.toString().padStart(2, "0")} SIGNALS</span>
         </div>
 
-        <div className="flex flex-col items-stretch gap-3 md:flex-row md:items-center md:gap-0">
-          {PIPELINE_STAGES.map((node, i) => (
-            <React.Fragment key={node.id}>
-              <PipelineNode node={node} active={i === 0 || i <= activeStage} />
-              {i < PIPELINE_STAGES.length - 1 && <DashedConnector active={i < activeStage} />}
-            </React.Fragment>
-          ))}
+        <div className="flex flex-col gap-2">
+          {sorted.map((p) => {
+            const isLong = p.direction === "BUY";
+            const ready = p.stage === "ready";
+            const barColor = p.direction === null ? "#475569" : isLong ? C.green : C.red;
+            return (
+              <div
+                key={p.pair}
+                className="relative flex items-center gap-3 border px-3 py-2.5"
+                style={{ ...chamferMicro(8), borderColor: ready ? C.cyan : C.iron, backgroundColor: ready ? "rgba(0,240,255,0.06)" : "rgba(17,21,32,0.5)" }}
+              >
+                <div style={{ color: barColor }}>{isLong ? <TrendingUp size={16} strokeWidth={2} /> : <TrendingDown size={16} strokeWidth={2} />}</div>
+
+                <div className="flex min-w-[92px] flex-col leading-none">
+                  <span className="font-mono text-[11px] font-bold text-slate-200">{p.pair}</span>
+                  <span className="mt-1 font-mono text-[8px] tracking-[0.15em]" style={{ color: p.direction ? barColor : "#475569" }}>
+                    {p.direction ? (isLong ? "LONG" : "SHORT") : "SCANNING"}
+                  </span>
+                </div>
+
+                <div className="relative h-1.5 flex-1 overflow-hidden rounded-full" style={{ backgroundColor: "rgba(30,41,59,0.7)" }}>
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{ backgroundColor: barColor }}
+                    animate={{ width: `${Math.max(2, p.confidence)}%` }}
+                    transition={{ duration: 0.6, ease: "easeOut" }}
+                  />
+                </div>
+
+                <span className="w-11 text-right font-mono text-[11px] font-bold" style={{ color: ready ? C.green : p.confidence >= 50 ? C.gold : "#64748B" }}>
+                  {p.confidence}%
+                </span>
+                <span className="w-8 text-right font-mono text-[9px] text-slate-600">{timeAgo(p.checkedAt)}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+/* Real, live-scrolling terminal feed sourced directly from qco2_engine_logs --
+   every row is an actual cron tick evaluation, not decorative/fake text. */
+const ACTION_TAG: Record<string, { tag: string; color: string }> = {
+  created: { tag: "SIGNAL", color: C.green },
+  monitoring: { tag: "WATCH", color: C.cyan },
+  no_trigger: { tag: "SCAN", color: "#64748B" },
+  closed: { tag: "CLOSE", color: C.gold },
+  timeout: { tag: "TIMEOUT", color: C.gold },
+  skipped_weekend: { tag: "SKIP", color: "#475569" },
+  error: { tag: "ERR", color: C.red },
+};
+
+interface EngineLogRow {
+  id: string;
+  pair: string;
+  action: string;
+  confidence: number | null;
+  direction: string | null;
+  reasoning: string | null;
+  created_at: string;
+}
+
+function EngineTerminalLog({ logs }: { logs: EngineLogRow[] }) {
+  const boxRef = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
+  }, [logs]);
+
+  return (
+    <Panel size={14}>
+      <CornerTicks color={C.green} />
+      <div className="p-4 md:p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <Terminal size={14} style={{ color: C.green }} strokeWidth={1.6} />
+          <span className="font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400">
+            AI ENGINE <span className="text-slate-600">//</span> TERMINAL
+          </span>
+          <span className="ml-auto font-mono text-[9px] tracking-[0.2em] text-slate-600">/dev/lastq</span>
         </div>
 
-        {current && current.weakFactors.length > 0 && (
-          <div className="mt-3 font-mono text-[9px] tracking-[0.1em] text-slate-500">
-            Lemah di: <span style={{ color: C.red }}>{current.weakFactors.join(", ")}</span>
+        <div ref={boxRef} className="max-h-[220px] overflow-y-auto font-mono text-[10px] leading-relaxed">
+          {logs.length === 0 && <div className="py-4 text-center text-slate-600">[ MENUNGGU TICK PERTAMA... ]</div>}
+          {logs.map((l) => {
+            const meta = ACTION_TAG[l.action] || { tag: l.action.toUpperCase(), color: "#64748B" };
+            const time = new Date(l.created_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Jakarta" });
+            return (
+              <div key={l.id} className="flex gap-2 py-0.5">
+                <span className="text-slate-600">{time}</span>
+                <span className="font-bold" style={{ color: meta.color }}>[{meta.tag}]</span>
+                <span className="text-slate-500">{l.pair}</span>
+                <span className="flex-1 truncate text-slate-400">
+                  {l.confidence !== null ? `conf ${l.confidence}%` : ""} {l.reasoning ? `— ${l.reasoning}` : ""}
+                </span>
+              </div>
+            );
+          })}
+          <div className="flex items-center gap-1 pt-1 text-slate-600">
+            <span>{">"}</span>
+            <motion.span className="inline-block h-3 w-1.5" style={{ backgroundColor: C.cyan }} animate={{ opacity: [1, 0, 1] }} transition={{ duration: 1, repeat: Infinity }} />
           </div>
-        )}
-
-        <div className="relative mt-4 h-[3px] overflow-hidden" style={{ backgroundColor: "rgba(30,41,59,0.6)" }}>
-          <motion.div
-            className="absolute top-0 h-full w-1/4"
-            style={{ background: `linear-gradient(90deg, transparent, ${C.cyan}, transparent)` }}
-            animate={{ left: ["-25%", "100%"] }}
-            transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
-          />
-        </div>
-
-        {/* real per-pair strip */}
-        <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-          {pipeline.map((p) => (
-            <button
-              key={p.pair}
-              onClick={() => setIdx(pipeline.indexOf(p))}
-              className="flex flex-col items-start border px-2.5 py-2 text-left transition-colors"
-              style={{ ...chamferMicro(6), borderColor: p.pair === current?.pair ? C.cyan : C.iron, backgroundColor: "rgba(0,0,0,0.3)" }}
-            >
-              <span className="font-mono text-[9px] font-bold tracking-[0.15em] text-slate-300">{p.pair}</span>
-              <span className="font-mono text-[10px] font-bold" style={{ color: p.confidence >= 76 ? C.green : p.confidence >= 50 ? C.gold : "#64748B" }}>
-                {p.confidence}%
-              </span>
-            </button>
-          ))}
         </div>
       </div>
     </Panel>
@@ -528,6 +595,9 @@ function SignalLog({ signals }: { signals: SignalRow[] }) {
 /* -------------------------------------------------------------------------- */
 
 export default function PendingPage() {
+  const { profile } = useMemberAuth();
+  const isVip = !!profile?.is_vip;
+  const [gateOpen, setGateOpen] = useState(false);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [flash, setFlash] = useState(false);
 
@@ -555,8 +625,8 @@ export default function PendingPage() {
   }, []);
 
   return (
-    <main className="min-h-screen w-full px-4 py-8 md:px-8" style={{ backgroundColor: C.bg }}>
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-5">
+    <main className="relative min-h-screen w-full px-4 py-8 md:px-8" style={{ backgroundColor: C.bg }}>
+      <div className={`mx-auto flex w-full max-w-4xl flex-col gap-5 ${isVip ? "" : "blur-md select-none pointer-events-none"}`}>
         <motion.header initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center border" style={{ ...chamferMicro(6), borderColor: C.cyan + "66", backgroundColor: C.cyan + "11" }}>
@@ -582,11 +652,15 @@ export default function PendingPage() {
           <div className="py-16 text-center font-mono text-[11px] tracking-[0.2em] text-slate-600">[ MENYAMBUNGKAN KE ENGINE... ]</div>
         ) : (
           <>
-            <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.5 }} aria-label="AI Processing Flow">
-              <AIPipeline pipeline={data.pipeline} />
+            <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.5 }} aria-label="Pending Pipeline">
+              <PendingPipelineList pipeline={data.pipeline} />
             </motion.section>
 
-            <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25, duration: 0.5 }} aria-label="Live Market Chart">
+            <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2, duration: 0.5 }} aria-label="AI Engine Terminal Log">
+              <EngineTerminalLog logs={data.logs} />
+            </motion.section>
+
+            <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3, duration: 0.5 }} aria-label="Live Market Chart">
               <TerminalChart target={data.target || "—"} chart={data.chart} />
             </motion.section>
 
@@ -601,6 +675,23 @@ export default function PendingPage() {
           <span>INSTITUTIONAL SMC v3 :: LIVE</span>
         </footer>
       </div>
+
+      {!isVip && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/40 backdrop-blur-[1px]">
+          <div className="w-12 h-12 chamfer-sm bg-[#05080f] border border-yellow-500/50 flex items-center justify-center">
+            <Lock size={20} className="text-yellow-500 drop-shadow-[0_0_8px_rgba(234,179,8,0.6)]" />
+          </div>
+          <span className="text-xs font-mono uppercase tracking-widest text-yellow-500">[ Fitur VIP ]</span>
+          <button
+            onClick={() => setGateOpen(true)}
+            className="chamfer-sm border border-cyan-400/40 px-4 py-2 text-[11px] font-mono uppercase tracking-widest text-cyan-300 bg-[#0b0f18]/80"
+          >
+            Upgrade untuk Akses
+          </button>
+        </div>
+      )}
+
+      <VipUpgradeModal open={gateOpen} onClose={() => setGateOpen(false)} featureName="AI Engine Terminal" />
     </main>
   );
 }

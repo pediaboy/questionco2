@@ -20,7 +20,7 @@ export interface PairConfig {
   pipUnit: number;
   tpPips: [number, number, number]; // TP1 (RR 1:1), TP2 (RR 1:2), TP3 (RR 1:4)
   slPips: number; // static, always 50
-  pipLabelSuffix: string; // e.g. "pips" or "USD"
+  pipLabelSuffix: string; // always "pips" -- pipUnit already converts each instrument's own move-size into a comparable pip count, so the label must say "pips" everywhere, never a currency name (fixed 2026-07-20, was wrongly "USD" for crypto pairs)
   skipWeekends: boolean;
 }
 
@@ -43,7 +43,7 @@ export const SIGNAL_PAIRS: PairConfig[] = [
     pipUnit: 4, // 1 "pip" = $4 move -> 50-pip SL = $200 (~0.31% of ~$64.5k)
     tpPips: [50, 100, 200],
     slPips: 50,
-    pipLabelSuffix: "USD",
+    pipLabelSuffix: "pips",
     skipWeekends: false,
   },
   {
@@ -53,7 +53,7 @@ export const SIGNAL_PAIRS: PairConfig[] = [
     pipUnit: 0.2, // 1 "pip" = $0.20 move -> 50-pip SL = $10 (~0.53% of ~$1.87k)
     tpPips: [50, 100, 200],
     slPips: 50,
-    pipLabelSuffix: "USD",
+    pipLabelSuffix: "pips",
     skipWeekends: false,
   },
   {
@@ -63,7 +63,7 @@ export const SIGNAL_PAIRS: PairConfig[] = [
     pipUnit: 0.008, // 1 "pip" = $0.008 move -> 50-pip SL = $0.40 (~0.53% of ~$76)
     tpPips: [50, 100, 200],
     slPips: 50,
-    pipLabelSuffix: "USD",
+    pipLabelSuffix: "pips",
     skipWeekends: false,
   },
 ];

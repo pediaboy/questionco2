@@ -29,6 +29,7 @@ import {
   Ticket,
   History,
   BellRing,
+  Cpu,
 } from "lucide-react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import VipUpgradeModal from "./VipUpgradeModal";
@@ -49,6 +50,7 @@ const CATEGORIES: { title: string; items: FeatureItem[] }[] = [
       { label: "Terminal", href: "/dashboard/terminal", icon: Activity, vipOnly: true },
       { label: "Analisa", href: "/analisa", icon: Newspaper },
       { label: "Riwayat Sinyal", href: "/dashboard/signal-history", icon: History },
+      { label: "AI Engine Terminal", href: "/dashboard/pending", icon: Cpu, vipOnly: true },
     ],
   },
   {
