@@ -16,10 +16,10 @@ export default function MemberDashboard() {
   const displayName = profile.full_name || profile.email.split("@")[0];
 
   const heroStats = stats || {
-    win_rate: profile.win_rate,
-    total_trade: profile.total_trade,
-    profit_pips: profile.profit_pips,
-    kelas_completed: profile.kelas_completed,
+    win_rate: 80,
+    total_trade: 0,
+    profit_pips: 0,
+    latest_signal: null,
   };
 
   return (
@@ -74,7 +74,7 @@ export default function MemberDashboard() {
           </span>
           <span className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.2em] text-slate-600">
             <span className="inline-block h-1 w-1 animate-pulse bg-cyan-400" />
-            SYNC 5S
+            SYNC 1S
           </span>
         </div>
         <MemberHeroStats profile={heroStats} />

@@ -8,6 +8,7 @@ import { getActiveSessions } from "@/lib/marketSessions";
 import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
 import { sendToChannel } from "@/lib/telegramApi";
 import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
+import { sendPushToAll } from "@/lib/pushNotify";
 import { sendSignalAlert, advanceTp, closeViaSl, advanceBe, BE_THRESHOLDS } from "@/lib/signalAlerts";
 import { checkPriceAlarms } from "@/lib/priceAlarms";
 
@@ -433,6 +434,12 @@ async function processPair(
   const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, "none", result.confidence, result.reasoning, []);
   await sendToChannel(vipChannelId(), message);
   await fanOutAlerts(admin, created.id, pair.label, result.direction, result.confidence, message.replace(/<[^>]+>/g, "")).catch(() => null);
+  sendPushToAll({
+    title: `Sinyal Baru: ${pair.label} ${result.direction}`,
+    body: `Entry ${entry.toFixed(decimals)} · Confidence ${result.confidence}%`,
+    url: "/dashboard/sinyal",
+    tag: "qco2-signal",
+  }).catch(() => null);
 
   return {
     pair: pair.key,

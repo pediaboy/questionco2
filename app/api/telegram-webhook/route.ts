@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { sendPushToAll } from "@/lib/pushNotify";
 import {
   sendMessage,
   editMessageText,
@@ -815,6 +816,12 @@ export async function POST(req: NextRequest) {
         const msg = buildSignalMessage(d.pair, d.direction, d.entry, d.sl, tps);
         await sendToChannel(vipChannelId(), msg);
         if (d.audience === "public") await sendToChannel(publicChannelId(), msg);
+        sendPushToAll({
+          title: `Sinyal Baru: ${d.pair} ${d.direction}`,
+          body: `Entry ${d.entry} · SL ${d.sl} · TP1 ${tps[0]}`,
+          url: "/dashboard/sinyal",
+          tag: "qco2-signal",
+        }).catch(() => null);
         await editMessageText(chatId, messageId, `✅ <b>Sinyal berhasil dikirim!</b>\n\nSudah tayang di web dan channel Telegram.`, [[BACK_BTN]]);
       }
       session.state = "idle";

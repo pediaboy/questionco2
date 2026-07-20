@@ -22,11 +22,16 @@ interface PreviewItem {
   total_lot: number;
 }
 
+interface LatestSignal {
+  pair: string;
+  direction: "BUY" | "SELL";
+}
+
 interface GlobalStats {
   win_rate: number;
   total_trade: number;
   profit_pips: number;
-  kelas_completed: number;
+  latest_signal: LatestSignal | null;
   updated_at: string;
 }
 
@@ -194,15 +199,23 @@ function CommunityClientContent() {
                 </div>
               </div>
 
-              {/* Classes Completed */}
+              {/* Latest Signal (was "Kelas Selesai" -- replaced with a live signal console readout) */}
               <div className="chamfer-sm border border-cyan-400/20 bg-[#0b0f18] p-3 flex flex-col justify-between min-h-[74px] relative">
                 <div className="absolute top-[3px] left-[3px] w-1.5 h-1.5 border-t border-l border-cyan-400/40" />
                 <div>
                   <p className="text-[8.5px] tracking-[0.15em] font-mono text-cyan-400/60 uppercase">
-                    [ EDUKASI SELESAI ]
+                    [ SINYAL TERBARU ]
                   </p>
-                  <p className="font-mono font-bold text-base text-white mt-1 uppercase">
-                    {stats.kelas_completed?.toLocaleString("id-ID") || "0"}
+                  <p
+                    className={`font-mono font-bold text-base mt-1 uppercase ${
+                      stats.latest_signal
+                        ? stats.latest_signal.direction === "BUY"
+                          ? "text-emerald-400"
+                          : "text-rose-400"
+                        : "text-white"
+                    }`}
+                  >
+                    {stats.latest_signal ? `${stats.latest_signal.pair} ${stats.latest_signal.direction}` : "--"}
                   </p>
                 </div>
                 <div className="flex justify-end">

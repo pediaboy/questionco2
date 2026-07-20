@@ -3,7 +3,8 @@
 import React, { useEffect, useState } from "react";
 import { useMemberAuth } from "@/lib/MemberAuthContext";
 import { supabase } from "@/lib/supabaseClient";
-import { Loader2, Save, Bell } from "lucide-react";
+import { Loader2, Save, Bell, BellRing, BellOff } from "lucide-react";
+import { enablePushNotifications, disablePushNotifications, isPushSupported } from "@/lib/webPush";
 
 interface ToggleProps {
   checked: boolean;
@@ -41,6 +42,19 @@ export default function SettingsPage() {
   const [prefs, setPrefs] = useState({ signal_alerts: true, announcement_alerts: true, promo_alerts: true });
   const [prefsLoading, setPrefsLoading] = useState(true);
   const [prefsSaving, setPrefsSaving] = useState(false);
+  const [pushStatus, setPushStatus] = useState<"idle" | "enabling" | "on" | "off" | "unsupported">("idle");
+  const [pushError, setPushError] = useState("");
+
+  useEffect(() => {
+    if (!isPushSupported()) {
+      setPushStatus("unsupported");
+      return;
+    }
+    navigator.serviceWorker.ready
+      .then((reg) => reg.pushManager.getSubscription())
+      .then((sub) => setPushStatus(sub ? "on" : "off"))
+      .catch(() => setPushStatus("off"));
+  }, []);
 
   useEffect(() => {
     if (profile) {
@@ -69,12 +83,32 @@ export default function SettingsPage() {
     const next = { ...prefs, [key]: value };
     setPrefs(next);
     setPrefsSaving(true);
+    setPushError("");
     try {
       await fetch("/api/member/notification-prefs", {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
         body: JSON.stringify({ [key]: value }),
       });
+
+      // "Alert Sinyal Baru" doubles as the real push-notification opt-in/out --
+      // this is what actually registers the device for OS/browser notifications.
+      if (key === "signal_alerts") {
+        if (value) {
+          setPushStatus("enabling");
+          const res = await enablePushNotifications(accessToken);
+          if (res.ok) {
+            setPushStatus("on");
+          } else {
+            setPushStatus("off");
+            setPrefs((p) => ({ ...p, signal_alerts: false }));
+            setPushError(res.reason || "Gagal mengaktifkan notifikasi.");
+          }
+        } else {
+          await disablePushNotifications();
+          setPushStatus("off");
+        }
+      }
     } finally {
       setPrefsSaving(false);
     }
@@ -193,9 +227,36 @@ export default function SettingsPage() {
         ) : (
           <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between">
-              <span className="text-white/70 text-[12.5px]">Alert Sinyal Baru</span>
-              <ChamferToggle checked={prefs.signal_alerts} onChange={(v) => updatePref("signal_alerts", v)} />
+              <div className="flex flex-col">
+                <span className="text-white/70 text-[12.5px]">Alert Sinyal Baru</span>
+                <span className="text-[9.5px] font-mono uppercase tracking-widest flex items-center gap-1 mt-0.5">
+                  {pushStatus === "on" && (
+                    <span className="text-emerald-400 flex items-center gap-1">
+                      <BellRing size={9} /> Notifikasi aktif di device ini
+                    </span>
+                  )}
+                  {pushStatus === "enabling" && (
+                    <span className="text-cyan-400 flex items-center gap-1">
+                      <Loader2 size={9} className="animate-spin" /> Mengaktifkan...
+                    </span>
+                  )}
+                  {pushStatus === "off" && (
+                    <span className="text-slate-600 flex items-center gap-1">
+                      <BellOff size={9} /> Belum aktif di device ini
+                    </span>
+                  )}
+                  {pushStatus === "unsupported" && (
+                    <span className="text-slate-600">Browser tidak mendukung notifikasi</span>
+                  )}
+                </span>
+              </div>
+              <ChamferToggle
+                checked={prefs.signal_alerts}
+                onChange={(v) => updatePref("signal_alerts", v)}
+                disabled={pushStatus === "unsupported" || pushStatus === "enabling"}
+              />
             </div>
+            {pushError && <p className="text-[10px] text-rose-400 font-mono">{pushError}</p>}
             <div className="flex items-center justify-between">
               <span className="text-white/70 text-[12.5px]">Pengumuman Platform</span>
               <ChamferToggle
