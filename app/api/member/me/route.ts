@@ -36,6 +36,10 @@ function serialize(profile: Record<string, unknown>) {
     profit_pips: profile.profit_pips ?? 0,
     kelas_completed: profile.kelas_completed ?? 0,
     telegram_username: profile.telegram_username ?? "",
+    total_lot: profile.total_lot ?? 0,
+    broker_registered: !!profile.broker_registered,
+    referral_code: (profile.referral_code as string) ?? "",
+    referred_by: (profile.referred_by as string) ?? "",
   };
 }
 

@@ -16,6 +16,10 @@ export interface MemberProfile {
   profit_pips: number;
   kelas_completed: number;
   telegram_username?: string;
+  total_lot: number;
+  broker_registered: boolean;
+  referral_code: string;
+  referred_by: string;
 }
 
 interface MemberAuthContextType {
