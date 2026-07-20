@@ -332,15 +332,11 @@ async function processPair(
 
   let result: { direction: "BUY" | "SELL" | null; confidence: number; reasoning: string; atr: number; blockReason?: string };
   let strategyMode: string;
-  let slMultiplier: number;
-  let rrTargets: number[];
 
   if (isXauAggressive) {
     const m1Aggr = await fetchOkxCandles(pair.dataInstId, "1m", 150);
     result = evaluateXauAggressive(m1Aggr, newsBlackout);
     strategyMode = "xau_aggressive_scalp_m1";
-    slMultiplier = 0.8; // tighter, aggressive M1 scalp stop
-    rrTargets = [1.5, 2.5, 4]; // scalp-appropriate RR (TP1/TP2/TP3)
   } else {
     const [m5, m1] = await Promise.all([
       fetchOkxCandles(pair.dataInstId, "5m", 300),
@@ -348,8 +344,6 @@ async function processPair(
     ]);
     result = evaluateInstitutional(m5, m1, newsBlackout, engineSettings, pair.pipUnit);
     strategyMode = "institutional_smc_v3";
-    slMultiplier = riskSettings.atrSlMultiplier;
-    rrTargets = riskSettings.rrTargets;
   }
 
   if (!result.direction) {
@@ -362,12 +356,31 @@ async function processPair(
   }
 
   const entry = livePrice;
-  const slDistance = result.atr * slMultiplier;
-  const sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;
-  const tps =
-    result.direction === "BUY"
-      ? rrTargets.map((rr) => entry + slDistance * rr)
-      : rrTargets.map((rr) => entry - slDistance * rr);
+
+  // XAU Aggressive uses a FIXED pip risk model (owner spec 2026-07-20, "TP/SL kedeketan,
+  // ga sesuai pasar buat agresif" -- ATR-based sizing was producing SL/TP too close
+  // together): SL is ALWAYS 50 pips. TP1=30, TP2=50, TP3=70, TP4(max)=100 pips -- note
+  // TP1 < SL is intentional (owner wants a fast partial-profit lock before the wider
+  // runner targets), not a mistake. Other pairs keep the existing ATR-based sizing.
+  let sl: number;
+  let tps: number[];
+  if (isXauAggressive) {
+    const slPips = 50;
+    const tpPipsList = [30, 50, 70, 100];
+    const slDistance = slPips * pair.pipUnit;
+    sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;
+    tps =
+      result.direction === "BUY"
+        ? tpPipsList.map((p) => entry + p * pair.pipUnit)
+        : tpPipsList.map((p) => entry - p * pair.pipUnit);
+  } else {
+    const slDistance = result.atr * riskSettings.atrSlMultiplier;
+    sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;
+    tps =
+      result.direction === "BUY"
+        ? riskSettings.rrTargets.map((rr) => entry + slDistance * rr)
+        : riskSettings.rrTargets.map((rr) => entry - slDistance * rr);
+  }
 
   const { data: created, error } = await admin
     .from("qco2_signals")
