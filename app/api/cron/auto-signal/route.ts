@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { fetchOkxCandles, fetchOkxLastPrice } from "@/lib/signalEngine";
 import { evaluateInstitutional, EngineSettings, DEFAULT_ENGINE_SETTINGS, FactorWeights } from "@/lib/institutionalEngine";
+import { evaluateXauAggressive } from "@/lib/xauAggressiveEngine";
 import { isNewsBlackout } from "@/lib/newsFilter";
 import { getActiveSessions } from "@/lib/marketSessions";
 import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
@@ -323,13 +324,34 @@ async function processPair(
     // to a fresh institutional evaluation below, same as the empty-rows case.
   }
 
-  // 2. No active AUTO signal — evaluate the institutional SMC strategy for a fresh trigger.
-  const [m5, m1] = await Promise.all([
-    fetchOkxCandles(pair.dataInstId, "5m", 300),
-    fetchOkxCandles(pair.dataInstId, "1m", 100),
-  ]);
+  // 2. No active AUTO signal — evaluate a fresh trigger.
+  // XAUUSD gets its own dedicated "Aggressive Scalping" engine (PSAR + EMA3/7 +
+  // StochRSI(5,3,3), owner-specified 2026-07-20, "khusus xau, paling agresif") on
+  // M1 data only. BTC/ETH/SOL keep using the Institutional SMC v3 model unchanged.
+  const isXauAggressive = pair.key === "XAUUSD";
 
-  const result = evaluateInstitutional(m5, m1, newsBlackout, engineSettings, pair.pipUnit);
+  let result: { direction: "BUY" | "SELL" | null; confidence: number; reasoning: string; atr: number; blockReason?: string };
+  let strategyMode: string;
+  let slMultiplier: number;
+  let rrTargets: number[];
+
+  if (isXauAggressive) {
+    const m1Aggr = await fetchOkxCandles(pair.dataInstId, "1m", 150);
+    result = evaluateXauAggressive(m1Aggr, newsBlackout);
+    strategyMode = "xau_aggressive_scalp_m1";
+    slMultiplier = 0.8; // tighter, aggressive M1 scalp stop
+    rrTargets = [1.5, 2.5, 4]; // scalp-appropriate RR (TP1/TP2/TP3)
+  } else {
+    const [m5, m1] = await Promise.all([
+      fetchOkxCandles(pair.dataInstId, "5m", 300),
+      fetchOkxCandles(pair.dataInstId, "1m", 100),
+    ]);
+    result = evaluateInstitutional(m5, m1, newsBlackout, engineSettings, pair.pipUnit);
+    strategyMode = "institutional_smc_v3";
+    slMultiplier = riskSettings.atrSlMultiplier;
+    rrTargets = riskSettings.rrTargets;
+  }
+
   if (!result.direction) {
     return {
       pair: pair.key,
@@ -340,12 +362,12 @@ async function processPair(
   }
 
   const entry = livePrice;
-  const slDistance = result.atr * riskSettings.atrSlMultiplier;
+  const slDistance = result.atr * slMultiplier;
   const sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;
   const tps =
     result.direction === "BUY"
-      ? riskSettings.rrTargets.map((rr) => entry + slDistance * rr)
-      : riskSettings.rrTargets.map((rr) => entry - slDistance * rr);
+      ? rrTargets.map((rr) => entry + slDistance * rr)
+      : rrTargets.map((rr) => entry - slDistance * rr);
 
   const { data: created, error } = await admin
     .from("qco2_signals")
@@ -365,14 +387,14 @@ async function processPair(
       audience: "vip",
       confidence: result.confidence,
       reasoning: result.reasoning,
-      strategy_mode: "institutional_smc_v3",
+      strategy_mode: strategyMode,
     })
     .select()
     .single();
 
   if (error) return { pair: pair.key, action: "error", error: error.message };
 
-  const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, result.trend, result.confidence, result.reasoning, result.checklist);
+  const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, "none", result.confidence, result.reasoning, []);
   await sendTelegramMessage(message);
   await fanOutAlerts(admin, created.id, pair.label, result.direction, result.confidence, message.replace(/<[^>]+>/g, "")).catch(() => null);
 
