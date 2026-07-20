@@ -142,6 +142,7 @@ function mainMenuView(): { text: string; kb: InlineKeyboard } {
     kb: [
       [{ text: "📊 Sinyal Manual", callback_data: "menu:signal" }],
       [{ text: "🎮 Kontrol Sinyal Aktif", callback_data: "menu:activesignals" }],
+      [{ text: "🔔 Price Alarm", callback_data: "menu:alarm" }],
       [{ text: "👥 Member VIP", callback_data: "menu:vip" }],
       [{ text: "🧾 Invoice Masuk", callback_data: "menu:invoice" }],
       [{ text: "📈 Statistik Global", callback_data: "menu:globalstats" }],
@@ -191,6 +192,59 @@ function signalDetailView(sig: Record<string, any>, cfg?: { pipUnit: number }): 
   const kb: InlineKeyboard = sig.status === "active" ? [...signalStatusKeyboard(sig.id), [{ text: "🔙 Daftar Sinyal Aktif", callback_data: "menu:activesignals" }]] : [[{ text: "🔙 Daftar Sinyal Aktif", callback_data: "menu:activesignals" }]];
 
   return { text, kb };
+}
+
+// ---------- price alarm (admin-only, DM alert -- owner 2026-07-20: "bikinin fitur
+// sender alert ke id admin, model nya ky price alarm, biar ga bablas entry an gua,
+// wajib sinkron"). Direction ('up'/'down') is auto-detected from the live price at
+// creation time vs the typed target -- admin doesn't need to pick it manually.
+// Triggering happens inside app/api/cron/auto-signal/route.ts using the exact same
+// live-price fetch as TP/SL/BE monitoring, so the alarm can never drift from what
+// the engine itself sees. ----------
+
+function alarmMenuView(): { text: string; kb: InlineKeyboard } {
+  return {
+    text: "🔔 <b>PRICE ALARM</b>\n━━━━━━━━━━━━━━━━\n\nAlarm DM langsung ke lo begitu harga nyentuh target -- biar gak bablas entry.\n\nPilih:",
+    kb: [
+      [{ text: "➕ Buat Alarm Baru", callback_data: "alarm:new" }],
+      [{ text: "📋 Alarm Aktif", callback_data: "alarm:list" }],
+      [BACK_BTN],
+    ],
+  };
+}
+
+function alarmPairStepView(): { text: string; kb: InlineKeyboard } {
+  const rows: InlineKeyboard = [];
+  for (let i = 0; i < SIGNAL_PAIR_OPTIONS.length; i += 2) {
+    rows.push(SIGNAL_PAIR_OPTIONS.slice(i, i + 2).map((p) => ({ text: p, callback_data: `alarm:pair:${p}` })));
+  }
+  rows.push([CANCEL_BTN]);
+  return { text: "🔔 <b>BUAT PRICE ALARM</b>\n━━━━━━━━━━━━━━━━\n\nStep 1/2 — Pilih pair:", kb: rows };
+}
+
+function alarmPricePromptView(pair: string, livePrice: number, decimals: number): { text: string; kb: InlineKeyboard } {
+  const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  return {
+    text: `🔔 <b>BUAT PRICE ALARM</b>\n━━━━━━━━━━━━━━━━\n\nPair: <b>${pair}</b>\nHarga sekarang: <b>${fmt(livePrice)}</b>\n\nStep 2/2 — Ketik harga target alarm:`,
+    kb: [[CANCEL_BTN]],
+  };
+}
+
+function alarmListView(rows: Record<string, any>[]): { text: string; kb: InlineKeyboard } {
+  if (!rows.length) {
+    return { text: "📋 <b>ALARM AKTIF</b>\n━━━━━━━━━━━━━━━━\n\nGak ada alarm aktif saat ini.", kb: [[{ text: "🔙 Price Alarm", callback_data: "menu:alarm" }]] };
+  }
+  const fmtRow = (r: Record<string, any>) => {
+    const cfgPair = SIGNAL_PAIRS.find((p) => p.label === r.pair);
+    const decimals = cfgPair && cfgPair.pipUnit < 1 ? 2 : 0;
+    const target = Number(r.target_price).toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    const arrow = r.direction === "up" ? "📈" : "📉";
+    return `${arrow} ${r.pair} @ ${target}`;
+  };
+  const kb: InlineKeyboard = rows.map((r) => [{ text: `❌ Batal — ${fmtRow(r)}`, callback_data: `alarm:cancel:${r.id}` }]);
+  kb.push([{ text: "🔙 Price Alarm", callback_data: "menu:alarm" }]);
+  const list = rows.map(fmtRow).join("\n");
+  return { text: `📋 <b>ALARM AKTIF</b>\n━━━━━━━━━━━━━━━━\n\n${list}\n\nTekan tombol utk batalin alarm:`, kb };
 }
 
 // ---------- signal wizard views ----------
@@ -556,6 +610,41 @@ export async function POST(req: NextRequest) {
         const v = signalDetailView(sig, cfg);
         await editMessageText(chatId, messageId, v.text, v.kb);
       }
+    } else if (data === "menu:alarm") {
+      session.state = "idle";
+      session.data = {};
+      const v = alarmMenuView();
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data === "alarm:new") {
+      session.state = "alarm_pair";
+      session.data = {};
+      const v = alarmPairStepView();
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data.startsWith("alarm:pair:")) {
+      const pairLabel = data.split(":")[2];
+      const cfg = SIGNAL_PAIRS.find((p) => p.label === pairLabel);
+      if (!cfg) {
+        await editMessageText(chatId, messageId, "❌ Pair tidak dikenali.", [[CANCEL_BTN]]);
+      } else {
+        const livePrice = await getLivePriceForPair(cfg.key, cfg.dataInstId);
+        const decimals = cfg.pipUnit < 1 ? 2 : 0;
+        session.data = { pair: pairLabel, decimals };
+        session.state = "alarm_price";
+        const v = alarmPricePromptView(pairLabel, livePrice, decimals);
+        await editMessageText(chatId, messageId, v.text, v.kb);
+      }
+    } else if (data === "alarm:list") {
+      session.state = "idle";
+      session.data = {};
+      const { data: rows } = await admin.from("qco2_price_alarms").select("*").eq("status", "active").order("created_at", { ascending: false }).limit(20);
+      const v = alarmListView(rows || []);
+      await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data.startsWith("alarm:cancel:")) {
+      const id = data.split(":")[2];
+      await admin.from("qco2_price_alarms").update({ status: "cancelled" }).eq("id", id);
+      const { data: rows } = await admin.from("qco2_price_alarms").select("*").eq("status", "active").order("created_at", { ascending: false }).limit(20);
+      const v = alarmListView(rows || []);
+      await editMessageText(chatId, messageId, `✅ Alarm dibatalkan.\n\n${v.text}`, v.kb);
     } else if (data === "menu:vip") {
       session.state = "idle";
       session.data = {};
@@ -766,7 +855,7 @@ export async function POST(req: NextRequest) {
     const session = await getSession(admin, chatId);
     const panelId = session.panel_message_id;
 
-    const numericSteps = ["signal_entry", "signal_sl", "signal_tp_input", "gs_awaiting_value", "lot_size_input", "lot_price_input"];
+    const numericSteps = ["signal_entry", "signal_sl", "signal_tp_input", "gs_awaiting_value", "lot_size_input", "lot_price_input", "alarm_price"];
     const textSteps = ["broadcast_title", "broadcast_body", "vip_search", "lot_search"];
 
     if (!numericSteps.includes(session.state) && !textSteps.includes(session.state)) {
@@ -801,6 +890,23 @@ export async function POST(req: NextRequest) {
         const header = `Pair: <b>${session.data.pair}</b> | Entry: <b>${session.data.entry}</b> | SL: <b>${session.data.sl}</b>\nTP: ${tps.join(", ")}`;
         const v = tpMenuView(header, tps.length);
         await editMessageText(chatId, panelId, v.text, v.kb);
+      } else if (session.state === "alarm_price") {
+        const pairLabel = session.data.pair as string;
+        const decimals = session.data.decimals as number;
+        const cfg = SIGNAL_PAIRS.find((p) => p.label === pairLabel);
+        const livePrice = cfg ? await getLivePriceForPair(cfg.key, cfg.dataInstId) : num;
+        const direction = num >= livePrice ? "up" : "down";
+        await admin.from("qco2_price_alarms").insert({ pair: pairLabel, target_price: num, direction, status: "active" });
+        const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+        const arrow = direction === "up" ? "📈" : "📉";
+        session.state = "idle";
+        session.data = {};
+        await editMessageText(
+          chatId,
+          panelId,
+          `✅ Alarm dibuat!\n\n${arrow} <b>${pairLabel}</b> — target <b>${fmt(num)}</b>\nHarga sekarang: ${fmt(livePrice)}\n\nBakal DM lo otomatis begitu harga ${direction === "up" ? "naik" : "turun"} nyentuh target.`,
+          [[{ text: "🔙 Price Alarm", callback_data: "menu:alarm" }]]
+        );
       } else if (session.state === "gs_awaiting_value") {
         const field = session.data.field as string;
         await admin.from("global_statistics").update({ [field]: num, updated_at: new Date().toISOString() }).eq("id", 1);

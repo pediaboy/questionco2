@@ -9,6 +9,7 @@ import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
 import { sendToChannel } from "@/lib/telegramApi";
 import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
 import { sendSignalAlert, advanceTp, closeViaSl, advanceBe, BE_THRESHOLDS } from "@/lib/signalAlerts";
+import { checkPriceAlarms } from "@/lib/priceAlarms";
 
 export const dynamic = "force-dynamic";
 
@@ -283,6 +284,11 @@ async function processPair(
   const rows = activeRows || [];
 
   const livePrice = pair.useLiveTickerFor ? await getLiveXauUsd() : await fetchOkxLastPrice(pair.dataInstId);
+
+  // Price alarms check off this EXACT livePrice -- the same fetch used for TP/SL/BE
+  // monitoring below, so alarms are guaranteed in sync with the engine's live data
+  // (owner 2026-07-20: "biar ga bablas entry an gua, wajib sinkron").
+  await checkPriceAlarms(admin, pair.label, livePrice, decimals).catch(() => null);
 
   let manualMonitoring: any[] = [];
   if (rows.length > 0) {
