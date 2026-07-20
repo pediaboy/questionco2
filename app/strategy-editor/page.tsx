@@ -6,26 +6,13 @@ import { ArrowLeft, SlidersHorizontal, Save, Loader2 } from "lucide-react";
 import { isAdminAuthed } from "@/lib/adminAuth";
 
 interface FactorWeights {
-  trend: number; structure: number; orderBlock: number; fvg: number; liquiditySweep: number;
-  zone: number; vwap: number; macd: number; rsi: number; adx: number; volume: number; cvd: number; bollinger: number;
-  snr: number;
+  trend: number;
+  rsi: number;
 }
 
 const FACTOR_LABELS: Record<keyof FactorWeights, string> = {
   trend: "Trend (EMA 9/21 + EMA200 Filter)",
-  structure: "Market Structure (BOS/CHOCH)",
-  orderBlock: "Order Block",
-  fvg: "Fair Value Gap (FVG)",
-  liquiditySweep: "Liquidity Sweep",
-  zone: "Premium/Discount Zone",
-  vwap: "VWAP",
-  macd: "MACD Cross",
-  rsi: "RSI Zone",
-  adx: "ADX Strength",
-  volume: "Relative Volume",
-  cvd: "CVD (Approx)",
-  bollinger: "Bollinger Reject",
-  snr: "Dynamic SnR (Donchian 50 + Buffer)",
+  rsi: "RSI(14) Zone",
 };
 
 export default function StrategyEditorPage() {

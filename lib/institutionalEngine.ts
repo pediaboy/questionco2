@@ -15,7 +15,7 @@
 // ============================================================================
 
 import type { Candle } from "./signalEngine";
-import { ema, vwap as vwapSeries } from "./signalEngine";
+import { ema } from "./signalEngine";
 import { inKillZone } from "./marketSessions";
 
 export type Direction = "BUY" | "SELL";
@@ -320,25 +320,17 @@ const RSI_BUY_MAX = 75;
 const RSI_SELL_MIN = 25;
 const RSI_SELL_MAX = 45;
 const ADX_MIN = 25;
-// Re-tuned 2026-07-20 (round 5) after the owner clarified this must be real
-// M1/M5 HIGH-RISK SCALPING — frequent, fast entries, not a slow selective system.
-// Two changes drove this retune: (1) SnR Donchian breakout was demoted from a hard
-// gate to a pure scoring factor (round 4, see FactorWeights.snr) — the only hard
-// gates left are the fast EMA9/21 momentum + EMA200 trend filter and the
-// anti-sideways min-distance check, both of which can flip within a few M5 candles;
-// (2) discovered and fixed a real bug where the qco2_engine_settings DB row
-// (created during an earlier settings-driven refactor) was silently overriding
-// every code-level CONFIDENCE_MIN change with a stale confidence_min=76 value —
-// meaning rounds 2-4's tuning never actually took effect live. With both fixed, a
-// fresh live 5-day OKX backtest across all 4 pairs (hard-gate-only frequency is now
-// ~750-830 passes/pair over 5 days — far more permissive than the old SnR-gated
-// design) showed 68% still only fires ~5.6/day, too conservative for the owner's
-// explicit high-risk-scalping ask. Swept 35-65%: chose 62% — ~14.6 signals/day
-// average (full-day range 12-23), a deliberately more aggressive frequency
-// matching "high risk scalping" tolerance while still requiring every non-hard-gate
-// factor (SnR, structure, RSI, MACD, ADX, volume, CVD, Bollinger, M15 confirmation)
-// to meaningfully contribute — not a free-for-all.
-const CONFIDENCE_MIN = 62;
+// Re-tuned 2026-07-20 (round 6) — owner explicitly stripped the strategy down to
+// "pake m5 m1 aja, kelamaan kalo m15, pake ema ma rsi aja" for real high-risk
+// scalping. Whole SMC confluence stack (structure/OB/FVG/liquidity/zone/VWAP/MACD/
+// ADX/CVD/Bollinger/SnR/M15) removed — engine is now EMA9/21+EMA200 (hard gate) +
+// RSI(14) zone (hard gate, promoted from a soft score) + M1 confirmation (bonus/
+// penalty, replacing M15) + volume (small bonus). Fresh live 5-day OKX backtest of
+// this exact lean model across all 4 pairs: hard gates alone pass ~750-830x/pair,
+// RSI zone narrows that to ~475-550x/pair. Swept 40-75%: chose 60% — ~15.6
+// signals/day average (full-day range 9-33), the most aggressive/frequent cadence
+// tried so far, matching the owner's explicit "high risk, scalping agresif" ask.
+const CONFIDENCE_MIN = 60;
 
 // ---------- owner-spec EA-style momentum/SnR parameters (2026-07-20) ----------
 // Pasted directly from the owner's MT4/5-style EA config. "Points" convention in
@@ -352,15 +344,19 @@ const SNR_LOOKBACK_PERIOD = 50; // Donchian channel lookback (candles)
 const MIN_DISTANCE_EMA_PIPS = 1; // 10 points = 1 pip -> min |EMA9-EMA21| gap to avoid sideways chop
 const SNR_BUFFER_PIPS = 2; // 20 points = 2 pips -> breakout confirmation tolerance vs false breakout
 
+// Simplified 2026-07-20 (round 6) per owner's explicit request: "pake m5 m1 aja,
+// kelamaan kalo m15, kan dibilang buat scalping agresif pake ema ma rsi aja" —
+// dropped the whole SMC confluence stack (structure/OB/FVG/liquidity/zone/VWAP/
+// MACD/ADX/CVD/Bollinger/SnR/M15). The strategy is now genuinely just EMA + RSI
+// on M5, with a fast M1 confirmation check (the M1 data was already being
+// fetched but unused before) replacing M15 as the timing nudge.
 export interface FactorWeights {
-  trend: number; structure: number; orderBlock: number; fvg: number; liquiditySweep: number;
-  zone: number; vwap: number; macd: number; rsi: number; adx: number; volume: number; cvd: number; bollinger: number;
-  snr: number; // Donchian(50)+buffer breakout confluence — added 2026-07-20 (round 4) when SnR was demoted from hard gate to scoring factor
+  trend: number; // EMA9/21 separation strength + distance from EMA200
+  rsi: number; // RSI(14) position quality within its directional zone
 }
 
 export const DEFAULT_FACTOR_WEIGHTS: FactorWeights = {
-  trend: 0.08, structure: 0.08, orderBlock: 0.05, fvg: 0.05, liquiditySweep: 0.07, zone: 0.07,
-  vwap: 0.09, macd: 0.09, rsi: 0.11, adx: 0.09, volume: 0.05, cvd: 0.03, bollinger: 0.04, snr: 0.1,
+  trend: 0.55, rsi: 0.45,
 };
 
 export interface EngineSettings {
@@ -430,179 +426,71 @@ export function evaluateInstitutional(
     return empty(`EMA9/21 terlalu berdekatan (${emaDistance.toFixed(4)} < ${minEmaDistance.toFixed(4)}) — market sideways, NO TRADE`);
   }
 
-  // Dynamic SnR (Donchian channel, 50-candle lookback) breakout confirmation —
-  // owner spec: SnR_Buffer_Points = 20 -> 2 pips tolerance vs false breakout.
-  // NOT a hard gate (changed 2026-07-20, round 4): requiring a full range-breakout
-  // on top of the EMA9/21+200 momentum/trend gate made this a "wait for a big
-  // range break" system, not real M1/M5 scalping — the owner explicitly wants fast,
-  // high-frequency, high-risk scalp entries, not rare breakout trades. SnR is now a
-  // WEIGHTED confluence score (extra credit when a breakout is present) exactly
-  // like BOS/CHOCH structure already is, so the only fast/frequent hard gates left
-  // are EMA9/21 momentum + EMA200 trend filter and the anti-sideways min-distance
-  // check just above — both of which can trigger within a handful of M5 candles.
-  const snrBuffer = SNR_BUFFER_PIPS * pipUnit;
-  const snrLookbackCandles = 3;
-  let snrBreakoutOk = false;
-  for (let k = 0; k < snrLookbackCandles; k++) {
-    const idx = m5.length - 1 - k;
-    if (idx < SNR_LOOKBACK_PERIOD) break;
-    const channel = donchianChannel(m5.slice(0, idx + 1), SNR_LOOKBACK_PERIOD);
-    const candleClose = m5[idx].close;
-    const brokeUp = candleClose > channel.upper + snrBuffer;
-    const brokeDown = candleClose < channel.lower - snrBuffer;
-    if ((direction === "BUY" && brokeUp) || (direction === "SELL" && brokeDown)) {
-      snrBreakoutOk = true;
-      break;
-    }
-  }
-
-  const vwapVal = vwapSeries(m5);
-  const lastVwap = vwapVal[vwapVal.length - 1];
-  const vwapOk = direction === "BUY" ? price > lastVwap : price < lastVwap;
-
-  const swings = findSwings(m5, 2);
-  const structBreak = detectStructureBreak(m5, swings);
-  const structureOk = structBreak.direction === (direction === "BUY" ? "up" : "down") && structBreak.type !== null;
-
-  const orderBlockOk = structureOk ? findOrderBlock(m5, structBreak.brokenLevel ? m5.length - 1 : 0, structBreak.direction!) : false;
-  const fvgOk = findFVG(m5, direction === "BUY" ? "up" : "down");
-  const liquiditySweepOk = findLiquiditySweep(m5, swings, direction === "BUY" ? "up" : "down");
-  const zone = premiumDiscountZone(price, swings);
-  const zoneOk = direction === "BUY" ? zone === "discount" : direction === "SELL" ? zone === "premium" : false;
-
+  // ---- RSI(14) hard gate ("pake ema ma rsi aja" — RSI is now a real hard gate
+  // alongside EMA, not just a soft score) ----
   const rsiSeries = rsi(closes, 14);
   const lastRsi = rsiSeries[rsiSeries.length - 1];
   const rsiOk = direction === "BUY" ? lastRsi >= RSI_BUY_MIN && lastRsi <= RSI_BUY_MAX : lastRsi >= RSI_SELL_MIN && lastRsi <= RSI_SELL_MAX;
-
-  const adx = adxSeries(m5, 14);
-  const lastAdx = adx[adx.length - 1];
-  const adxOk = !Number.isNaN(lastAdx) && lastAdx >= ADX_MIN;
+  if (!rsiOk) {
+    return empty(
+      `RSI(14) ${lastRsi.toFixed(1)} diluar zona ${direction === "BUY" ? `${RSI_BUY_MIN}-${RSI_BUY_MAX}` : `${RSI_SELL_MIN}-${RSI_SELL_MAX}`} — NO TRADE`
+    );
+  }
 
   const atrVals = atrSeries(m5, 14);
   const lastAtr = atrVals[atrVals.length - 1];
-  const atrOk = !Number.isNaN(lastAtr) && lastAtr > 0;
+  if (!(!Number.isNaN(lastAtr) && lastAtr > 0)) {
+    return empty("Data ATR tidak valid — NO TRADE");
+  }
 
-  const { macdLine, signalLine, hist } = macdSeries(closes);
-  const n = macdLine.length;
-  const macdBullCross = macdLine[n - 2] <= signalLine[n - 2] && macdLine[n - 1] > signalLine[n - 1];
-  const macdBearCross = macdLine[n - 2] >= signalLine[n - 2] && macdLine[n - 1] < signalLine[n - 1];
-  const macdOk = direction === "BUY" ? macdBullCross : macdBearCross;
-  const macdHistAligned = direction === "BUY" ? hist[n - 1] > 0 : hist[n - 1] < 0;
+  // ---- M1 fast confirmation (replaces M15 — owner wants M1/M5 only, no M15) ----
+  const m1Closes = m1.map((c) => c.close);
+  const m1EmaFast = ema(m1Closes, EMA_FAST_PERIOD);
+  const m1EmaSlow = ema(m1Closes, EMA_SLOW_PERIOD);
+  const lastM1Fast = m1EmaFast[m1EmaFast.length - 1];
+  const lastM1Slow = m1EmaSlow[m1EmaSlow.length - 1];
+  const m1Trend: "up" | "down" | "none" = lastM1Fast > lastM1Slow ? "up" : lastM1Fast < lastM1Slow ? "down" : "none";
+  const m1Agree = m1Trend !== "none" && m1Trend === (direction === "BUY" ? "up" : "down");
+  const m1Bonus = m1Trend === "none" ? 0 : m1Agree ? 8 : -10;
 
-  const bb = bollinger(closes, 20, 2);
-  const lastLow = m5[m5.length - 1].low;
-  const lastHigh = m5[m5.length - 1].high;
-  const bbOk =
-    direction === "BUY"
-      ? !Number.isNaN(bb.lower[n - 1]) && lastLow <= bb.lower[n - 1] && price > bb.lower[n - 1]
-      : !Number.isNaN(bb.upper[n - 1]) && lastHigh >= bb.upper[n - 1] && price < bb.upper[n - 1];
-
-  // Volume: current M5 candle vs 20-candle average
+  // ---- Volume (RVOL) — small quality nudge, not a full weighted factor ----
   const vols = m5.map((c) => c.volume);
   const avgVol20 = vols.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
   const lastVol = vols[vols.length - 1];
   const volumeOk = avgVol20 > 0 && lastVol > avgVol20;
-
-  // CVD: rising for BUY, falling for SELL, and not diverging vs price over the same window
-  const cvd = cvdSeries(m5);
-  const lookback = 10;
-  const cvdSlope = cvd[cvd.length - 1] - cvd[cvd.length - 1 - lookback];
-  const priceSlope = closes[closes.length - 1] - closes[closes.length - 1 - lookback];
-  const cvdDirOk = direction === "BUY" ? cvdSlope > 0 : cvdSlope < 0;
-  const cvdDiverging = Math.sign(cvdSlope) !== Math.sign(priceSlope) && cvdSlope !== 0 && priceSlope !== 0;
-  const cvdOk = cvdDirOk && !cvdDiverging;
-
-  const killZoneOk = true; // already gated above — always true if we got this far
+  const volBonus = avgVol20 > 0 ? (volumeOk ? 5 : -3) : 0;
 
   const checklist: ChecklistItem[] = [
-    { label: "EMA9/21 Momentum + EMA200 Filter", pass: true }, // hard gate above; direction only set when aligned
+    { label: "EMA9/21 Momentum + EMA200 Filter", pass: true }, // hard gate above
     { label: "Anti-Sideways (Min Distance EMA)", pass: true }, // hard gate above
-    { label: "Dynamic SnR (Donchian 50 + Buffer)", pass: snrBreakoutOk }, // weighted score, not a hard gate anymore
-    { label: "BOS", pass: structureOk && structBreak.type === "BOS" },
-    { label: "CHOCH", pass: structureOk && structBreak.type === "CHOCH" },
-    { label: "Order Block", pass: orderBlockOk },
-    { label: "Liquidity Sweep", pass: liquiditySweepOk },
-    { label: "FVG", pass: fvgOk },
-    { label: "Premium/Discount Zone", pass: zoneOk },
-    { label: "VWAP", pass: vwapOk },
-    { label: "MACD", pass: macdOk },
-    { label: "RSI", pass: rsiOk },
-    { label: "ADX", pass: adxOk },
-    { label: "ATR", pass: atrOk },
-    { label: "Volume", pass: volumeOk },
-    { label: "CVD", pass: cvdOk },
-    { label: "Kill Zone", pass: killZoneOk },
-    { label: "Bollinger Band", pass: bbOk },
+    { label: "RSI(14) Zone", pass: rsiOk }, // hard gate above
+    { label: "M1 Confirmation", pass: m1Agree },
+    { label: "Volume (RVOL)", pass: volumeOk },
   ];
 
-  // ---- HARD gates ----
-  // 1) EMA9/21 momentum + EMA200 trend filter, 2) EMA9/21 min-distance anti-sideways,
-  // 3) Donchian(50) SnR breakout w/ buffer — all three checked (and can early-return)
-  // above, per owner's EA-style spec. SMC structure (BOS/CHOCH) is now a WEIGHTED
-  // scoring factor, not a hard gate (kept from the earlier fix — requiring it
-  // alongside the new SnR breakout made the engine fire near-zero times again).
-  if (!atrOk) {
-    return empty("Data ATR tidak valid — NO TRADE");
-  }
-
-  // ---- confidence scoring (0-100), each component normalized, partial credit ----
-  const adxScore = Math.min(100, Math.max(0, ((lastAdx - ADX_MIN) / 25) * 100));
-  const volScore = Math.min(100, Math.max(0, ((lastVol / Math.max(avgVol20, 1e-9) - 1) / 1) * 100));
+  // ---- confidence: pure EMA + RSI weighted base (per owner spec), M1 + volume
+  // are additive bonus/penalty nudges only, not part of the weighted 100% base ----
+  const trendGap = Math.abs(lastEmaFast - lastEma200) / lastEma200;
+  const trendScore = Math.min(100, trendGap * 10000);
   const rsiCenter = direction === "BUY" ? 65 : 35;
   const rsiRange = direction === "BUY" ? RSI_BUY_MAX - RSI_BUY_MIN : RSI_SELL_MAX - RSI_SELL_MIN;
   const rsiScore = Math.max(0, 100 - (Math.abs(lastRsi - rsiCenter) / (rsiRange / 2)) * 100);
-  const trendGap = Math.abs(lastEmaFast - lastEma200) / lastEma200;
-  const trendScore = Math.min(100, trendGap * 10000);
-  const vwapDist = Math.abs(price - lastVwap) / Math.max(lastAtr, 1e-9);
-  const vwapScore = vwapOk ? Math.min(100, 50 + vwapDist * 50) : Math.max(0, 50 - vwapDist * 50);
-  const structureScore = !structureOk ? 20 : structBreak.type === "BOS" ? 100 : 85;
-  const macdScore = macdOk ? 100 : macdHistAligned ? 55 : 15;
-  const orderBlockScore = orderBlockOk ? 100 : 35;
-  const fvgScore = fvgOk ? 100 : 35;
-  const liquiditySweepScore = liquiditySweepOk ? 100 : 25;
-  const zoneScore = zoneOk ? 100 : zone === "equilibrium" ? 55 : 15;
-  const cvdScore = cvdOk ? 100 : cvdDirOk ? 45 : 15;
-  const bbScore = bbOk ? 100 : 40;
-  const snrScore = snrBreakoutOk ? 100 : 30;
 
-  const weights: [number, number][] = [
-    [trendScore, fw.trend],
-    [structureScore, fw.structure],
-    [orderBlockScore, fw.orderBlock],
-    [fvgScore, fw.fvg],
-    [liquiditySweepScore, fw.liquiditySweep],
-    [zoneScore, fw.zone],
-    [vwapScore, fw.vwap],
-    [macdScore, fw.macd],
-    [rsiScore, fw.rsi],
-    [adxScore, fw.adx],
-    [volScore, fw.volume],
-    [cvdScore, fw.cvd],
-    [bbScore, fw.bollinger],
-    [snrScore, fw.snr ?? DEFAULT_FACTOR_WEIGHTS.snr], // fallback for settings saved before SnR became a scoring factor
-  ];
-  const baseConfidence = Math.round(weights.reduce((sum, [score, w]) => sum + score * w, 0));
-
-  // ---- M15 multi-timeframe confirmation (scalping bias) ----
-  // Real scalping setups check a higher timeframe (M15) for overall bias before
-  // trusting an M5 entry trigger. Rewards agreement, penalizes disagreement —
-  // does not hard-block, since M15/M5 can legitimately diverge briefly on scalps.
-  const m15 = m15Trend(m5);
-  const m15Agree = m15 !== "none" && m15 === trend;
-  const m15Bonus = m15 === "none" ? 0 : m15Agree ? 8 : -12;
-  checklist.push({ label: "M15 Trend Confirmation", pass: m15Agree });
-  const confidence = Math.max(0, Math.min(100, baseConfidence + m15Bonus));
+  const baseConfidence = trendScore * fw.trend + rsiScore * fw.rsi;
+  const confidence = Math.max(0, Math.min(100, Math.round(baseConfidence + m1Bonus + volBonus)));
 
   if (confidence < confidenceMin) {
-    const weak = checklist.filter((c) => !c.pass && c.label !== "BOS" && c.label !== "CHOCH").map((c) => c.label);
-    return { ...empty(`Confidence ${confidence}% dibawah minimal ${confidenceMin}% (lemah di: ${weak.join(", ") || "kombinasi minor"})`), confidence };
+    const weak = checklist.filter((c) => !c.pass).map((c) => c.label);
+    return {
+      ...empty(`Confidence ${confidence}% dibawah minimal ${confidenceMin}% (lemah di: ${weak.join(", ") || "EMA/RSI kombinasi minor"})`),
+      confidence,
+    };
   }
 
   const reasoning =
-    `${direction} — struktur ${structBreak.type} mengkonfirmasi trend ${trend.toUpperCase()}. ` +
-    `Price ${direction === "BUY" ? "diatas" : "dibawah"} VWAP & EMA200, RSI ${lastRsi.toFixed(1)}, ADX ${lastAdx.toFixed(1)}, ` +
-    `volume ${(lastVol / avgVol20).toFixed(2)}x rata-rata, CVD ${cvdDirOk ? "konfirmasi" : "netral"} tanpa divergensi. ` +
-    `Zone: ${zone}.`;
+    `${direction} — EMA9/21 momentum searah EMA200 (trend ${trend.toUpperCase()}), RSI(14) ${lastRsi.toFixed(1)} dalam zona ` +
+    `${direction === "BUY" ? `${RSI_BUY_MIN}-${RSI_BUY_MAX}` : `${RSI_SELL_MIN}-${RSI_SELL_MAX}`}. ` +
+    `M1 ${m1Agree ? "konfirmasi" : m1Trend === "none" ? "netral" : "berlawanan"} arah, volume ${(lastVol / Math.max(avgVol20, 1e-9)).toFixed(2)}x rata-rata.`;
 
   return {
     direction,
@@ -612,6 +500,6 @@ export function evaluateInstitutional(
     reasoning,
     entry: price,
     atr: lastAtr,
-    structureType: structBreak.type,
+    structureType: null,
   };
 }

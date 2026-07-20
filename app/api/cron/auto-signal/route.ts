@@ -57,7 +57,7 @@ function buildInstitutionalSignalMessage(
 
   return (
     `🚨 <b>SCALPING SIGNAL</b>\n━━━━━━━━━━━━━━━━\n\n` +
-    `Pair : <b>${pair.label}</b>\nTimeframe : M5\nTrend : <b>${trend.toUpperCase()}</b>\n\n` +
+    `Pair : <b>${pair.label}</b>\nTimeframe : M1/M5\nTrend : <b>${trend.toUpperCase()}</b>\n\n` +
     `Signal : <b>${direction}</b>\n\n` +
     `Entry : <b>${fmt(entry)}</b>\nStoploss : <b>${fmt(sl)}</b>\n` +
     `Take Profit 1 : <b>${fmt(tps[0])}</b>  (RR 1:${RR_TARGETS[0]})\n` +
