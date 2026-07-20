@@ -11,15 +11,15 @@
 //      NOT gates, just confidence boosters shown in the signal reasoning (owner's
 //      own doc calls these "bonus/hidden weapon", not the core trigger).
 //
-// Rule: PSAR flip (within the last 3 confirmed M1 candles) is REQUIRED, plus at
+// Rule: PSAR flip (within the last 6 confirmed M1 candles) is REQUIRED, plus at
 // least ONE of {EMA3/7 cross, StochRSI extreme-turn} in the same direction — this
 // is the "double confirmation, don't wait for a 2nd candle" setup the owner asked for.
 //
-// TREND FILTER (added 2026-07-20, owner: "bikin ngikut trend, bukan lawan trend,
-// agresif tapi aman"): a HARD gate against the M5 EMA20/50 trend. PSAR-based
-// reversal triggers can easily fire counter-trend, which the owner explicitly does
-// NOT want even for aggressive scalping. The proposed direction must match the M5
-// trend (up=BUY only, down=SELL only); if M5 trend is flat/ambiguous, NO TRADE.
+// TREND FILTER (added 2026-07-20, loosened same day -- owner: "bikin ngikut trend,
+// bukan lawan trend, agresif tapi aman" then "trend nya ga muncul samsek"): a HARD
+// gate against the M5 EMA20/50 trend, but only rejects when the trend directly
+// OPPOSES the flip direction -- flat/ambiguous M5 trend is neutral and does NOT
+// block (requiring an exact match was too strict and choked off nearly every signal).
 //
 // LIQUIDITY SWEEP / M3 (added 2026-07-20, owner: "scalping agresif M1 M3 M5
 // liquiditas, kasih aja sinyal mau volatil atau ga"): a 3rd optional 2nd-confirmation
@@ -220,9 +220,12 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
   const atrArr = atrSeries(m1, 14);
   const atr = atrArr[last] || atrArr.filter((v) => !Number.isNaN(v)).slice(-1)[0] || 0;
 
-  // 1. PSAR flip within the last 3 confirmed candles (mandatory trigger).
+  // 1. PSAR flip within the last 6 confirmed candles (mandatory trigger). Widened
+  // from 3->6 (2026-07-20, "trend nya ga muncul samsek") -- the cron ticks every 5
+  // minutes, so a 3-candle (3min) lookback was systematically missing flips that
+  // happened between ticks. 6 candles gives safe overlap.
   let psarFlip: "BUY" | "SELL" | null = null;
-  for (let i = last; i >= Math.max(1, last - 2); i--) {
+  for (let i = last; i >= Math.max(1, last - 5); i--) {
     if (trend[i] === "up" && trend[i - 1] === "down") {
       psarFlip = "BUY";
       break;
@@ -245,26 +248,30 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
     };
   }
 
-  // 1b. HARD trend gate: M5 EMA20/50 must agree with the PSAR flip direction —
-  // never trade against the higher-timeframe trend, even aggressively.
+  // 1b. HARD trend gate: only reject if M5 EMA20/50 trend directly OPPOSES the PSAR
+  // flip direction (loosened 2026-07-20, "trend nya ga muncul samsek" -- requiring
+  // an exact match was too strict and choked off almost every signal). Flat/none
+  // trend no longer blocks -- it's neutral, not "must match".
   const trendM5 = m5Trend(m5);
-  const trendMatches = (trendM5 === "up" && psarFlip === "BUY") || (trendM5 === "down" && psarFlip === "SELL");
+  const trendOpposes = (trendM5 === "down" && psarFlip === "BUY") || (trendM5 === "up" && psarFlip === "SELL");
+  const trendMatches = !trendOpposes;
   checklist.push({ label: "M5 Trend Alignment (EMA20/50)", pass: trendMatches });
 
   if (!trendMatches) {
     return {
       direction: null,
       confidence: 20,
-      reasoning: `PSAR flip ${psarFlip} tapi trend M5 ${trendM5 === "none" ? "flat/tidak jelas" : trendM5} — lawan trend, NO TRADE`,
+      reasoning: `PSAR flip ${psarFlip} tapi trend M5 ${trendM5} — lawan trend, NO TRADE`,
       atr,
       checklist,
       blockReason: "PSAR flip melawan trend M5",
     };
   }
 
-  // 2. EMA3/EMA7 crossover within last 3 bars, same direction as PSAR flip.
+  // 2. EMA3/EMA7 crossover within last 6 bars (widened with PSAR window above), same
+  // direction as PSAR flip.
   let emaCross: "BUY" | "SELL" | null = null;
-  for (let i = last; i >= Math.max(1, last - 2); i--) {
+  for (let i = last; i >= Math.max(1, last - 5); i--) {
     if (ema3[i - 1] <= ema7[i - 1] && ema3[i] > ema7[i]) {
       emaCross = "BUY";
       break;
@@ -279,7 +286,7 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
 
   // 3. StochRSI(5,3,3) exiting <10 turning up, or >90 turning down, same direction.
   let stochTurn: "BUY" | "SELL" | null = null;
-  for (let i = last; i >= Math.max(2, last - 2); i--) {
+  for (let i = last; i >= Math.max(2, last - 5); i--) {
     if (!Number.isNaN(stochK[i]) && !Number.isNaN(stochK[i - 1])) {
       if (stochK[i - 1] < 10 && stochK[i] > stochK[i - 1]) {
         stochTurn = "BUY";

@@ -21,7 +21,8 @@ async function sendSignalAlert(audience: string | null | undefined, text: string
 export const dynamic = "force-dynamic";
 
 const CRON_SECRET = "7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d";
-const BE_THRESHOLDS = [30, 50, 70];
+const BE_THRESHOLDS = [20, 50, 70]; // first level lowered 30->20 per owner request 2026-07-20
+const AUTO_COOLDOWN_MINUTES = 30; // no fresh auto signal for a pair within 30min of its last auto signal closing (owner request 2026-07-20)
 const TIMEOUT_MINUTES = 60;
 const ATR_SL_MULTIPLIER = 1.5;
 const RR_TARGETS = [2, 3, 4, 6]; // TP1=RR1:2, TP2=RR1:3, TP3=RR1:4, TP4=RR1:6 (extended runner)
@@ -306,6 +307,7 @@ async function processPair(
 
   const livePrice = pair.useLiveTickerFor ? await getLiveXauUsd() : await fetchOkxLastPrice(pair.dataInstId);
 
+  let manualMonitoring: any[] = [];
   if (rows.length > 0) {
     const monitorResults = [];
     let hasActiveAuto = false;
@@ -320,11 +322,41 @@ async function processPair(
       // auto eval while one is open) and just report the monitoring results.
       return monitorResults.length === 1 ? monitorResults[0] : { pair: pair.key, action: "monitoring", sub: monitorResults };
     }
-    // No active AUTO signal (only manual ones, if any, still open) -- fall through
-    // to a fresh institutional evaluation below, same as the empty-rows case.
+    // No active AUTO signal (only manual ones, if any, still open) -- keep these
+    // monitoring results so they're not silently discarded (fixed 2026-07-20:
+    // previously a fresh eval below would overwrite the reported "action", making
+    // it look like manual signals were never being monitored even though the
+    // TP/SL/BE alerts were firing correctly in the background).
+    manualMonitoring = monitorResults;
   }
 
-  // 2. No active AUTO signal — evaluate a fresh trigger.
+  // 1b. 30-minute cooldown after the last AUTO signal closed for this pair (owner
+  // request 2026-07-20: "kalo udah kena TP jangan ngirim lagi sampe timeout 30menit").
+  // Applies after ANY closure type (TP hit, SL hit, or timeout) for consistency.
+  const { data: lastClosedAuto } = await admin
+    .from("qco2_signals")
+    .select("closed_at")
+    .eq("pair", pair.label)
+    .eq("source", "auto")
+    .neq("status", "active")
+    .order("closed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (lastClosedAuto?.closed_at) {
+    const minsSinceClose = (Date.now() - new Date(lastClosedAuto.closed_at).getTime()) / 60000;
+    if (minsSinceClose < AUTO_COOLDOWN_MINUTES) {
+      return {
+        pair: pair.key,
+        action: "no_trigger",
+        reason: `Cooldown ${Math.ceil(AUTO_COOLDOWN_MINUTES - minsSinceClose)} menit lagi setelah sinyal auto terakhir ditutup`,
+        confidence: 0,
+        ...(manualMonitoring.length ? { manual_monitoring: manualMonitoring } : {}),
+      };
+    }
+  }
+
+  // 2. No active AUTO signal, cooldown cleared — evaluate a fresh trigger.
   // XAUUSD gets its own dedicated "Aggressive Scalping" engine (PSAR + EMA3/7 +
   // StochRSI(5,3,3), owner-specified 2026-07-20, "khusus xau, paling agresif") on
   // M1 data only. BTC/ETH/SOL keep using the Institutional SMC v3 model unchanged.
@@ -356,6 +388,7 @@ async function processPair(
       action: "no_trigger",
       reason: result.blockReason || result.reasoning || "no_trigger",
       confidence: result.confidence,
+      ...(manualMonitoring.length ? { manual_monitoring: manualMonitoring } : {}),
     };
   }
 
@@ -415,7 +448,15 @@ async function processPair(
   await sendTelegramMessage(message);
   await fanOutAlerts(admin, created.id, pair.label, result.direction, result.confidence, message.replace(/<[^>]+>/g, "")).catch(() => null);
 
-  return { pair: pair.key, action: "created", id: created.id, direction: result.direction, entry, confidence: result.confidence };
+  return {
+    pair: pair.key,
+    action: "created",
+    id: created.id,
+    direction: result.direction,
+    entry,
+    confidence: result.confidence,
+    ...(manualMonitoring.length ? { manual_monitoring: manualMonitoring } : {}),
+  };
 }
 
 export async function POST(req: NextRequest) {
