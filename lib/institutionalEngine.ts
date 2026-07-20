@@ -351,11 +351,12 @@ const SNR_BUFFER_PIPS = 2; // 20 points = 2 pips -> breakout confirmation tolera
 export interface FactorWeights {
   trend: number; structure: number; orderBlock: number; fvg: number; liquiditySweep: number;
   zone: number; vwap: number; macd: number; rsi: number; adx: number; volume: number; cvd: number; bollinger: number;
+  snr: number; // Donchian(50)+buffer breakout confluence — added 2026-07-20 (round 4) when SnR was demoted from hard gate to scoring factor
 }
 
 export const DEFAULT_FACTOR_WEIGHTS: FactorWeights = {
-  trend: 0.1, structure: 0.12, orderBlock: 0.05, fvg: 0.05, liquiditySweep: 0.08, zone: 0.08,
-  vwap: 0.1, macd: 0.1, rsi: 0.12, adx: 0.1, volume: 0.05, cvd: 0.03, bollinger: 0.02,
+  trend: 0.08, structure: 0.08, orderBlock: 0.05, fvg: 0.05, liquiditySweep: 0.07, zone: 0.07,
+  vwap: 0.09, macd: 0.09, rsi: 0.11, adx: 0.09, volume: 0.05, cvd: 0.03, bollinger: 0.04, snr: 0.1,
 };
 
 export interface EngineSettings {
@@ -426,20 +427,18 @@ export function evaluateInstitutional(
   }
 
   // Dynamic SnR (Donchian channel, 50-candle lookback) breakout confirmation —
-  // requires a genuine confirmed break past the channel edge by more than the
-  // buffer (owner spec: SnR_Buffer_Points = 20 -> 2 pips) to filter false breakouts.
-  // RECENT-breakout window (last 3 closed candles, not just the single freshest
-  // tick): a live 5-min cron checking only the exact current candle for "is price
-  // beyond the edge RIGHT NOW" misses the breakout entirely once price pulls back
-  // even slightly inside the buffer a candle or two later — starving the engine of
-  // valid setups that already happened and are still playing out. Matches this
-  // project's existing precedent of widening single-candle-only conditions to a
-  // short lookback (see the earlier EMA9/21 crossover tuning).
+  // owner spec: SnR_Buffer_Points = 20 -> 2 pips tolerance vs false breakout.
+  // NOT a hard gate (changed 2026-07-20, round 4): requiring a full range-breakout
+  // on top of the EMA9/21+200 momentum/trend gate made this a "wait for a big
+  // range break" system, not real M1/M5 scalping — the owner explicitly wants fast,
+  // high-frequency, high-risk scalp entries, not rare breakout trades. SnR is now a
+  // WEIGHTED confluence score (extra credit when a breakout is present) exactly
+  // like BOS/CHOCH structure already is, so the only fast/frequent hard gates left
+  // are EMA9/21 momentum + EMA200 trend filter and the anti-sideways min-distance
+  // check just above — both of which can trigger within a handful of M5 candles.
   const snrBuffer = SNR_BUFFER_PIPS * pipUnit;
   const snrLookbackCandles = 3;
   let snrBreakoutOk = false;
-  let snrUpperRef = 0;
-  let snrLowerRef = 0;
   for (let k = 0; k < snrLookbackCandles; k++) {
     const idx = m5.length - 1 - k;
     if (idx < SNR_LOOKBACK_PERIOD) break;
@@ -447,28 +446,10 @@ export function evaluateInstitutional(
     const candleClose = m5[idx].close;
     const brokeUp = candleClose > channel.upper + snrBuffer;
     const brokeDown = candleClose < channel.lower - snrBuffer;
-    if (direction === "BUY" && brokeUp) {
+    if ((direction === "BUY" && brokeUp) || (direction === "SELL" && brokeDown)) {
       snrBreakoutOk = true;
-      snrUpperRef = channel.upper;
-      snrLowerRef = channel.lower;
       break;
     }
-    if (direction === "SELL" && brokeDown) {
-      snrBreakoutOk = true;
-      snrUpperRef = channel.upper;
-      snrLowerRef = channel.lower;
-      break;
-    }
-    if (k === 0) {
-      snrUpperRef = channel.upper;
-      snrLowerRef = channel.lower;
-    }
-  }
-  if (!snrBreakoutOk) {
-    return empty(
-      `Belum ada breakout SnR Donchian(${SNR_LOOKBACK_PERIOD}) dalam ${snrLookbackCandles} candle terakhir dengan buffer ${snrBuffer.toFixed(4)} ` +
-        `(upper ${snrUpperRef.toFixed(4)} / lower ${snrLowerRef.toFixed(4)}, price ${price.toFixed(4)}) — NO TRADE`
-    );
   }
 
   const vwapVal = vwapSeries(m5);
@@ -532,7 +513,7 @@ export function evaluateInstitutional(
   const checklist: ChecklistItem[] = [
     { label: "EMA9/21 Momentum + EMA200 Filter", pass: true }, // hard gate above; direction only set when aligned
     { label: "Anti-Sideways (Min Distance EMA)", pass: true }, // hard gate above
-    { label: "Dynamic SnR (Donchian 50 + Buffer)", pass: true }, // hard gate above
+    { label: "Dynamic SnR (Donchian 50 + Buffer)", pass: snrBreakoutOk }, // weighted score, not a hard gate anymore
     { label: "BOS", pass: structureOk && structBreak.type === "BOS" },
     { label: "CHOCH", pass: structureOk && structBreak.type === "CHOCH" },
     { label: "Order Block", pass: orderBlockOk },
@@ -578,6 +559,7 @@ export function evaluateInstitutional(
   const zoneScore = zoneOk ? 100 : zone === "equilibrium" ? 55 : 15;
   const cvdScore = cvdOk ? 100 : cvdDirOk ? 45 : 15;
   const bbScore = bbOk ? 100 : 40;
+  const snrScore = snrBreakoutOk ? 100 : 30;
 
   const weights: [number, number][] = [
     [trendScore, fw.trend],
@@ -593,6 +575,7 @@ export function evaluateInstitutional(
     [volScore, fw.volume],
     [cvdScore, fw.cvd],
     [bbScore, fw.bollinger],
+    [snrScore, fw.snr ?? DEFAULT_FACTOR_WEIGHTS.snr], // fallback for settings saved before SnR became a scoring factor
   ];
   const baseConfidence = Math.round(weights.reduce((sum, [score, w]) => sum + score * w, 0));
 

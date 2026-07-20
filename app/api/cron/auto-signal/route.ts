@@ -142,7 +142,7 @@ async function loadEngineSettings(admin: ReturnType<typeof getSupabaseAdmin>): P
   }
   const fw = data.factor_weights as FactorWeights;
   return {
-    engine: { confidenceMin: data.confidence_min ?? 76, factorWeights: fw ?? DEFAULT_ENGINE_SETTINGS.factorWeights },
+    engine: { confidenceMin: data.confidence_min ?? DEFAULT_ENGINE_SETTINGS.confidenceMin, factorWeights: fw ?? DEFAULT_ENGINE_SETTINGS.factorWeights },
     risk: {
       atrSlMultiplier: Number(data.atr_sl_multiplier) || ATR_SL_MULTIPLIER,
       rrTargets: Array.isArray(data.rr_targets) ? data.rr_targets : RR_TARGETS,

@@ -8,10 +8,11 @@ import { isAdminAuthed } from "@/lib/adminAuth";
 interface FactorWeights {
   trend: number; structure: number; orderBlock: number; fvg: number; liquiditySweep: number;
   zone: number; vwap: number; macd: number; rsi: number; adx: number; volume: number; cvd: number; bollinger: number;
+  snr: number;
 }
 
 const FACTOR_LABELS: Record<keyof FactorWeights, string> = {
-  trend: "Trend (EMA 20/50/200)",
+  trend: "Trend (EMA 9/21 + EMA200 Filter)",
   structure: "Market Structure (BOS/CHOCH)",
   orderBlock: "Order Block",
   fvg: "Fair Value Gap (FVG)",
@@ -24,6 +25,7 @@ const FACTOR_LABELS: Record<keyof FactorWeights, string> = {
   volume: "Relative Volume",
   cvd: "CVD (Approx)",
   bollinger: "Bollinger Reject",
+  snr: "Dynamic SnR (Donchian 50 + Buffer)",
 };
 
 export default function StrategyEditorPage() {
