@@ -41,7 +41,12 @@ export const SIGNAL_PAIRS: PairConfig[] = [
     label: "BTCUSDT",
     dataInstId: "BTC-USDT",
     pipUnit: 4, // 1 "pip" = $4 move -> 50-pip SL = $200 (~0.31% of ~$64.5k)
-    tpPips: [50, 100, 200],
+    // Swing-trade profile (owner request 2026-07-21): TP1/TP2/TP3 = 150/200/500 pips,
+    // matching the real fixed-pip ladder the auto-signal cron now uses for BTC
+    // specifically (see app/api/cron/auto-signal/route.ts) -- kept in sync here so
+    // the recap report and the open-positions BE/SL estimate reference the same
+    // real targets instead of the old generic 50/100/200.
+    tpPips: [150, 200, 500],
     slPips: 50,
     pipLabelSuffix: "pips",
     skipWeekends: false,

@@ -17,11 +17,20 @@ export const dynamic = "force-dynamic";
 const CRON_SECRET = "7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d";
 const AUTO_COOLDOWN_MINUTES = 30; // no fresh auto signal for a pair within 30min of its last auto signal closing (owner request 2026-07-20)
 const TIMEOUT_MINUTES = 60;
-// XAU Aggressive scalping needs a much shorter timeout (owner request 2026-07-20:
-// "kalo dah 20menit ga nyentuh langsung kasih time out") -- BTC/ETH/SOL institutional
-// SMC keeps the slower 60-min window.
-function timeoutMinutesFor(pairKey: string): number {
-  return pairKey === "XAUUSD" ? 20 : TIMEOUT_MINUTES;
+// Owner request 2026-07-21: the old XAU-only 20-min BLANKET timeout was firing way
+// too early -- a signal would only reach TP1 (small partial profit) then time out
+// 20min later regardless, immediately freeing the pair for a fresh (often losing)
+// re-entry. That churn was the actual source of the signal-spam complaint ("baru
+// sampe tp1 udah kirim lagi") and the terrible realized win ratio ("profit 1x los
+// 173x") -- NOT a missing "wait for active signal" gate (that gate already existed,
+// see hasActiveAuto below). Fix: ALL pairs now get the same 60-min window, AND
+// (see the tp_alert_level check at the call site) a signal only times out if it
+// HASN'T reached TP3 yet -- once TP3 is hit it's let ride to its final target or SL,
+// never force-closed by the clock. XAU + BTC (this cron's current priority pairs)
+// benefit most since they're the ones the owner is actively tuning; ETH/SOL get the
+// same protection for free since it's a strict improvement either way.
+function timeoutMinutesFor(_pairKey: string): number {
+  return TIMEOUT_MINUTES;
 }
 const ATR_SL_MULTIPLIER = 1.5;
 const RR_TARGETS = [2, 3, 4, 6]; // TP1=RR1:2, TP2=RR1:3, TP3=RR1:4, TP4=RR1:6 (extended runner)
@@ -229,7 +238,11 @@ async function monitorOneSignal(
   // conclusive happened" state, not something an admin would declare on demand.
   const ageMin = (Date.now() - new Date(active.created_at).getTime()) / 60000;
   const timeoutMins = timeoutMinutesFor(pair.key);
-  if (ageMin >= timeoutMins) {
+  const currentTpLevel: number = active.tp_alert_level || 0;
+  // Owner request 2026-07-21: don't time out once TP3 has already been reached --
+  // let it keep running toward its final target / SL instead of force-closing a
+  // signal that's already deep in profit just because the clock ran out.
+  if (ageMin >= timeoutMins && currentTpLevel < 3) {
     await admin
       .from("qco2_signals")
       .update({ status: "timeout", hit_level: "timeout", closed_at: new Date().toISOString() })
@@ -397,6 +410,19 @@ async function processPair(
       result.direction === "BUY"
         ? tpPipsList.map((p) => entry + p * pair.pipUnit)
         : tpPipsList.map((p) => entry - p * pair.pipUnit);
+  } else if (pair.key === "BTCUSDT") {
+    // BTC swing-trade profile (owner request 2026-07-21, "buat swing target tp1
+    // 150pip tp2 200pip tp3 500pip") -- fixed pip TP ladder instead of ATR/RR
+    // multiples, replacing the old 4-target RR system for BTC specifically. SL
+    // stays ATR-based (owner didn't specify a new SL, only the 3 TP levels) --
+    // only 3 TPs now, no TP4 runner.
+    const slDistance = result.atr * riskSettings.atrSlMultiplier;
+    sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;
+    const swingTpPips = [150, 200, 500];
+    tps =
+      result.direction === "BUY"
+        ? swingTpPips.map((p) => entry + p * pair.pipUnit)
+        : swingTpPips.map((p) => entry - p * pair.pipUnit);
   } else {
     const slDistance = result.atr * riskSettings.atrSlMultiplier;
     sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;

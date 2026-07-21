@@ -64,6 +64,30 @@ function rsi(closes: number[], period = 14): number[] {
   return out;
 }
 
+// Standard Bollinger Bands (20-period SMA, +/-2 stddev) -- owner request 2026-07-21:
+// "yg bener buat scalping nya ema ma boll sar" (EMA + Bollinger + SAR is the right
+// combo for scalping). Used below as a HARD anti-chase gate: the old momentum/PSAR
+// triggers alone could fire a BUY right as price was already extended above the
+// upper band (buying the top) or a SELL right as price was already extended below
+// the lower band (selling the bottom) -- exactly the owner's complaint ("harga dah
+// di pucuk malah suruh beli, harga udah jatoh malah suruh sell").
+function bollingerBands(closes: number[], period = 20, mult = 2): { upper: number[]; lower: number[]; basis: number[] } {
+  const n = closes.length;
+  const basis: number[] = new Array(n).fill(NaN);
+  const upper: number[] = new Array(n).fill(NaN);
+  const lower: number[] = new Array(n).fill(NaN);
+  for (let i = period - 1; i < n; i++) {
+    const window = closes.slice(i - period + 1, i + 1);
+    const mean = window.reduce((a, b) => a + b, 0) / period;
+    const variance = window.reduce((a, b) => a + (b - mean) ** 2, 0) / period;
+    const sd = Math.sqrt(variance);
+    basis[i] = mean;
+    upper[i] = mean + mult * sd;
+    lower[i] = mean - mult * sd;
+  }
+  return { basis, upper, lower };
+}
+
 function atrSeries(candles: Candle[], period = 14): number[] {
   const out: number[] = new Array(candles.length).fill(NaN);
   const trs: number[] = [];
@@ -344,6 +368,32 @@ export function evaluateXauAggressive(m1: Candle[], m3: Candle[], m5: Candle[], 
       atr,
       checklist,
       blockReason: `${triggerSource === "momentum" ? "Momentum breakout" : "PSAR flip"} melawan trend M5`,
+    };
+  }
+
+  // 1c. Bollinger Band (20, 2) anti-chase HARD gate -- owner request 2026-07-21.
+  // Don't BUY if price is already AT/ABOVE the upper band (already pumped to the
+  // top -- chasing), don't SELL if price is already AT/BELOW the lower band
+  // (already dumped to the bottom -- chasing). This is the fix for "beli di pucuk,
+  // jual di dasar": the trigger (PSAR/momentum) can still fire, but an overextended
+  // entry gets blocked rather than taken.
+  const bb = bollingerBands(closes, 20, 2);
+  const bbUpper = bb.upper[last];
+  const bbLower = bb.lower[last];
+  const bbOverextended =
+    !Number.isNaN(bbUpper) && !Number.isNaN(bbLower)
+      ? (primaryDirection === "BUY" && currentPrice >= bbUpper) || (primaryDirection === "SELL" && currentPrice <= bbLower)
+      : false;
+  checklist.push({ label: "Bollinger Band (20,2) Anti-Chase", pass: !bbOverextended });
+
+  if (bbOverextended) {
+    return {
+      direction: null,
+      confidence: 25,
+      reasoning: `${primaryDirection} terdeteksi tapi harga sudah overextended di luar Bollinger Band (${primaryDirection === "BUY" ? "sudah di pucuk" : "sudah di dasar"}) — NO TRADE, hindari beli di pucuk / jual di dasar`,
+      atr,
+      checklist,
+      blockReason: "Harga overextended di luar Bollinger Band -- anti-chase",
     };
   }
 
