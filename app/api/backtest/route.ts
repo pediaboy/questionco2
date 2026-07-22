@@ -25,11 +25,11 @@ export const maxDuration = 60;
  */
 
 const OKX_BASE = "https://www.okx.com/api/v5/market/candles";
-const BAR_MS: Record<string, number> = { "1m": 60_000, "3m": 180_000, "5m": 300_000 };
+const BAR_MS: Record<string, number> = { "1m": 60_000, "3m": 180_000, "5m": 300_000, "1H": 3_600_000 };
 
 // Paginate OKX's candle endpoint backward in time (max 300 rows/request) until
 // `neededCount` real candles are collected or history runs out.
-async function fetchOkxHistory(instId: string, bar: "1m" | "3m" | "5m", neededCount: number): Promise<Candle[]> {
+async function fetchOkxHistory(instId: string, bar: "1m" | "3m" | "5m" | "1H", neededCount: number): Promise<Candle[]> {
   const all: Candle[] = [];
   let after: number | null = null;
   let guard = 0;
@@ -109,13 +109,15 @@ export async function POST(req: NextRequest) {
     const stepMs = BAR_MS["5m"];
     const windowMs = days * 24 * 60 * 60 * 1000;
 
-    let m5: Candle[], m1: Candle[], m3: Candle[] = [];
+    let m5: Candle[], m1: Candle[] = [], h1: Candle[] = [];
     if (isXau) {
-      [m1, m5] = await Promise.all([
-        fetchOkxHistory(pair.dataInstId, "1m", Math.ceil(windowMs / BAR_MS["1m"]) + 200),
+      // XAU SMC engine needs M5 (structure/FVG/liquidity sweep) + H1 (EMA200 trend,
+      // needs 210+ bars regardless of the requested backtest window -- fetch a fixed
+      // 300-bar H1 history so EMA200 is properly seeded well before simStart).
+      [m5, h1] = await Promise.all([
         fetchOkxHistory(pair.dataInstId, "5m", Math.ceil(windowMs / BAR_MS["5m"]) + 100),
+        fetchOkxHistory(pair.dataInstId, "1H", 300),
       ]);
-      m3 = resampleTo3m(m1);
     } else {
       [m5, m1] = await Promise.all([
         fetchOkxHistory(pair.dataInstId, "5m", Math.ceil(windowMs / BAR_MS["5m"]) + 320),
@@ -123,7 +125,7 @@ export async function POST(req: NextRequest) {
       ]);
     }
 
-    if (m5.length < 250 || m1.length < 120) {
+    if (m5.length < 250 || (isXau ? h1.length < 210 : m1.length < 120)) {
       return NextResponse.json({ success: false, error: "Data historis OKX tidak cukup untuk periode ini" }, { status: 502 });
     }
 
@@ -143,12 +145,14 @@ export async function POST(req: NextRequest) {
 
       let direction: "BUY" | "SELL" | null = null;
       let atr = 0;
+      let entryOverride: number | undefined;
 
       if (isXau) {
-        const m3Slice = m3.filter((c) => c.ts <= t).slice(-60);
-        if (m3Slice.length < 60) continue;
-        const res = evaluateXauAggressive(m1Slice, m3Slice, m5Slice, false, pair.pipUnit, m5Slice[m5Slice.length - 1].close);
+        const h1Slice = h1.filter((c) => c.ts <= t).slice(-210);
+        if (h1Slice.length < 210) continue;
+        const res = evaluateXauAggressive(m5Slice, h1Slice, false, pair.pipUnit, m5Slice[m5Slice.length - 1].close);
         direction = res.direction;
+        entryOverride = res.entryOverride;
       } else {
         const res = evaluateInstitutional(m5Slice, m1Slice, false, engineSettings, pair.pipUnit);
         direction = res.direction;
@@ -156,12 +160,20 @@ export async function POST(req: NextRequest) {
       }
       if (!direction) continue;
 
-      const entry = m5Slice[m5Slice.length - 1].close;
+      // XAU entry is the FVG-zone limit level (matches the live cron), never the
+      // raw close -- keeps backtest SL/TP anchored the same way the real engine does.
+      const entry = isXau ? entryOverride ?? m5Slice[m5Slice.length - 1].close : m5Slice[m5Slice.length - 1].close;
       let sl: number, tps: number[];
       if (isXau) {
         const slDist = 50 * pair.pipUnit;
         sl = direction === "BUY" ? entry - slDist : entry + slDist;
         tps = [30, 50, 70, 100].map((p) => (direction === "BUY" ? entry + p * pair.pipUnit : entry - p * pair.pipUnit));
+      } else if (pair.key === "BTCUSDT") {
+        // Keep the backtest truthful to the live model (owner spec 2026-07-21: BTC
+        // swing profile, fixed 150/200/500 pip TPs instead of ATR/RR multiples).
+        const slDist = atr * atrSlMultiplier;
+        sl = direction === "BUY" ? entry - slDist : entry + slDist;
+        tps = [150, 200, 500].map((p) => (direction === "BUY" ? entry + p * pair.pipUnit : entry - p * pair.pipUnit));
       } else {
         const slDist = atr * atrSlMultiplier;
         sl = direction === "BUY" ? entry - slDist : entry + slDist;
@@ -212,7 +224,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       pair: pair.label,
-      strategy: isXau ? "xau_aggressive_scalp_m1" : "institutional_smc_v3",
+      strategy: isXau ? "xau_smc_liquidity_fvg_v1" : "institutional_smc_v3",
       days,
       candlesEvaluated: m5.filter((c) => c.ts >= simStart).length,
       totalSignals: trades.length,

@@ -12,7 +12,7 @@ import {
 import { TELEGRAM_ADMIN_ID, vipChannelId, publicChannelId, SIGNAL_PAIR_OPTIONS, signalStatusKeyboard } from "@/lib/telegramBotConfig";
 import { SIGNAL_PAIRS } from "@/lib/signalPairs";
 import { getLivePriceForPair } from "@/lib/signalEngine";
-import { advanceTp, closeViaSl, advanceBe, decimalsFor } from "@/lib/signalAlerts";
+import { advanceTp, closeViaSl, advanceBe, decimalsFor, isChannelPair } from "@/lib/signalAlerts";
 import { sendPushToUser } from "@/lib/pushNotify";
 
 export const dynamic = "force-dynamic";
@@ -815,8 +815,12 @@ export async function POST(req: NextRequest) {
         await editMessageText(chatId, messageId, `❌ Gagal simpan sinyal: ${error.message}`, [[BACK_BTN]]);
       } else {
         const msg = buildSignalMessage(d.pair, d.direction, d.entry, d.sl, tps);
-        await sendToChannel(vipChannelId(), msg);
-        if (d.audience === "public") await sendToChannel(publicChannelId(), msg);
+        // Owner request 2026-07-22: Telegram channel only for XAU + BTC -- ETH/SOL
+        // manual signals still save + push + show on web, just skip the channel post.
+        if (isChannelPair(d.pair)) {
+          await sendToChannel(vipChannelId(), msg);
+          if (d.audience === "public") await sendToChannel(publicChannelId(), msg);
+        }
         sendPushToAll({
           title: `Sinyal Baru: ${d.pair} ${d.direction}`,
           body: `Entry ${d.entry} · SL ${d.sl} · TP1 ${tps[0]}`,

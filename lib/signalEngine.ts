@@ -23,7 +23,7 @@ export interface Candle {
 }
 
 // OKX candles: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm], newest first.
-export async function fetchOkxCandles(instId: string, bar: "1m" | "3m" | "5m", limit = 100): Promise<Candle[]> {
+export async function fetchOkxCandles(instId: string, bar: "1m" | "3m" | "5m" | "1H", limit = 100): Promise<Candle[]> {
   const url = `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${bar}&limit=${limit}`;
   const res = await fetch(url, { cache: "no-store" });
   const json = await res.json();

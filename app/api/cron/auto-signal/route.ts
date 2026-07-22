@@ -9,7 +9,7 @@ import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
 import { sendToChannel } from "@/lib/telegramApi";
 import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
 import { sendPushToAll } from "@/lib/pushNotify";
-import { sendSignalAlert, advanceTp, closeViaSl, advanceBe, BE_THRESHOLDS } from "@/lib/signalAlerts";
+import { sendSignalAlert, advanceTp, closeViaSl, advanceBe, BE_THRESHOLDS, isChannelPair } from "@/lib/signalAlerts";
 import { checkPriceAlarms } from "@/lib/priceAlarms";
 
 export const dynamic = "force-dynamic";
@@ -74,19 +74,26 @@ function buildInstitutionalSignalMessage(
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   const pips = (price: number) => Math.round(Math.abs(price - entry) / pair.pipUnit);
 
-  // Cosmetic entry zone: a small buffer toward the more favorable fill price
-  // (higher for SELL, lower for BUY) — 3 pips wide, matching the owner's example.
-  const zoneBuffer = 3 * pair.pipUnit;
-  const zoneLow = direction === "SELL" ? entry : entry - zoneBuffer;
-  const zoneHigh = direction === "SELL" ? entry + zoneBuffer : entry;
+  // XAU signals are now genuine LIMIT orders anchored to an FVG zone (owner spec
+  // 2026-07-22) -- label it explicitly as BUY LIMIT / SELL LIMIT instead of a plain
+  // market BUY/SELL, and drop the old cosmetic +/-3 pip buffer since `entry` IS
+  // already the exact FVG boundary, not a live-chased price.
+  const isXauLimit = pair.key === "XAUUSD";
+  const setupLabel = isXauLimit ? `${direction} LIMIT` : direction;
 
+  const zoneBuffer = 3 * pair.pipUnit;
+  const zoneLow = isXauLimit ? entry : direction === "SELL" ? entry : entry - zoneBuffer;
+  const zoneHigh = isXauLimit ? entry : direction === "SELL" ? entry + zoneBuffer : entry;
+
+  // Owner spec 2026-07-22: TP1 must carry an explicit BEP note (move SL to entry)
+  // for XAU specifically.
   const tpLines = tps
-    .map((tp, i) => `   TP${i + 1}  ›  ${fmt(tp)}  (${pips(tp)} pips)`)
+    .map((tp, i) => `   TP${i + 1}  ›  ${fmt(tp)}  (${pips(tp)} pips)${isXauLimit && i === 0 ? "  — Set BEP (geser SL ke Entry)" : ""}`)
     .join("\n");
 
   return (
     `⚜️ <b>LASTQUESTION VVIP SIGNAL</b> ⚜️\n━━━━━━━━━━━━━━━━\n\n` +
-    `📊 PAIR    : ${pair.label}\n📈 SETUP   : <b>${direction}</b>\n🎯 ENTRY   : ${fmt(zoneLow)} – ${fmt(zoneHigh)}\n\n` +
+    `📊 PAIR    : ${pair.label}\n📈 SETUP   : <b>${setupLabel}</b>\n🎯 ENTRY   : ${isXauLimit ? fmt(zoneLow) : `${fmt(zoneLow)} – ${fmt(zoneHigh)}`}\n\n` +
     `🎯 TAKE PROFIT\n${tpLines}\n\n` +
     `🛑 STOP LOSS : ${fmt(sl)}  (${pips(sl)} pips)\n\n` +
     `⚠️ Gunakan money management.\nAmankan profit di TP1 / TP2, hindari overtrade.\n\n` +
@@ -248,7 +255,7 @@ async function monitorOneSignal(
       .update({ status: "timeout", hit_level: "timeout", closed_at: new Date().toISOString() })
       .eq("id", active.id);
 
-    await sendSignalAlert(active.audience, buildTimeoutMessage(timeoutMins));
+    await sendSignalAlert(pair.key, active.audience, buildTimeoutMessage(timeoutMins));
     return { pair: pair.key, source: active.source, action: "timeout", age_min: Math.round(ageMin), still_active: false };
   }
 
@@ -357,22 +364,21 @@ async function processPair(
   }
 
   // 2. No active AUTO signal, cooldown cleared — evaluate a fresh trigger.
-  // XAUUSD gets its own dedicated "Aggressive Scalping" engine (PSAR + EMA3/7 +
-  // StochRSI(5,3,3), owner-specified 2026-07-20, "khusus xau, paling agresif") on
-  // M1 data only. BTC/ETH/SOL keep using the Institutional SMC v3 model unchanged.
+  // XAUUSD gets its own dedicated SMC Liquidity Sweep + FVG engine (M5 structure +
+  // H1 EMA200 trend filter, owner spec 2026-07-22, full replacement of the old
+  // PSAR/momentum model). BTC/ETH/SOL keep using the Institutional SMC v3 model.
   const isXauAggressive = pair.key === "XAUUSD";
 
-  let result: { direction: "BUY" | "SELL" | null; confidence: number; reasoning: string; atr: number; blockReason?: string };
+  let result: { direction: "BUY" | "SELL" | null; confidence: number; reasoning: string; atr: number; blockReason?: string; entryOverride?: number };
   let strategyMode: string;
 
   if (isXauAggressive) {
-    const [m1Aggr, m3Aggr, m5Aggr] = await Promise.all([
-      fetchOkxCandles(pair.dataInstId, "1m", 150),
-      fetchOkxCandles(pair.dataInstId, "3m", 60),
-      fetchOkxCandles(pair.dataInstId, "5m", 60),
+    const [m5Xau, h1Xau] = await Promise.all([
+      fetchOkxCandles(pair.dataInstId, "5m", 300),
+      fetchOkxCandles(pair.dataInstId, "1H", 300),
     ]);
-    result = evaluateXauAggressive(m1Aggr, m3Aggr, m5Aggr, newsBlackout, pair.pipUnit, livePrice);
-    strategyMode = "xau_aggressive_scalp_m1";
+    result = evaluateXauAggressive(m5Xau, h1Xau, newsBlackout, pair.pipUnit, livePrice);
+    strategyMode = "xau_smc_liquidity_fvg_v1";
   } else {
     const [m5, m1] = await Promise.all([
       fetchOkxCandles(pair.dataInstId, "5m", 300),
@@ -392,7 +398,10 @@ async function processPair(
     };
   }
 
-  const entry = livePrice;
+  // XAU's entry is the FVG-zone limit level (top of FVG for BUY, bottom for SELL)
+  // computed by the engine itself -- never the raw live price -- so the fixed-pip
+  // SL/TP below are anchored to the actual limit-order fill, not a chased extreme.
+  const entry = isXauAggressive ? result.entryOverride ?? livePrice : livePrice;
 
   // XAU Aggressive uses a FIXED pip risk model (owner spec 2026-07-20, "TP/SL kedeketan,
   // ga sesuai pasar buat agresif" -- ATR-based sizing was producing SL/TP too close
@@ -458,7 +467,12 @@ async function processPair(
   if (error) return { pair: pair.key, action: "error", error: error.message };
 
   const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, "none", result.confidence, result.reasoning, []);
-  await sendToChannel(vipChannelId(), message);
+  // Owner request 2026-07-22: Telegram channel blasts only for XAU + BTC -- ETH/SOL
+  // still get created, monitored, pushed (web) and shown on the dashboard, just not
+  // posted to the Telegram channel.
+  if (isChannelPair(pair.key)) {
+    await sendToChannel(vipChannelId(), message);
+  }
   await fanOutAlerts(admin, created.id, pair.label, result.direction, result.confidence, message.replace(/<[^>]+>/g, "")).catch(() => null);
   sendPushToAll({
     title: `Sinyal Baru: ${pair.label} ${result.direction}`,

@@ -192,7 +192,7 @@ export default function BacktestPage() {
               <CornerTicks />
               <div className="p-4">
                 <span className="mb-3 block font-mono text-[9px] uppercase tracking-[0.25em] text-slate-500">
-                  Breakdown Level TP ({result.strategy === "xau_aggressive_scalp_m1" ? "30/50/70/100 pips" : "RR dinamis dari ATR"})
+                  Breakdown Level TP ({result.strategy === "xau_smc_liquidity_fvg_v1" ? "30/50/70/100 pips" : result.pair === "BTCUSDT" ? "150/200/500 pips (swing)" : "RR dinamis dari ATR"})
                 </span>
                 <div className="grid grid-cols-4 gap-2">
                   {["tp1", "tp2", "tp3", "tp4"].map((k) => (

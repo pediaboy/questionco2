@@ -30,9 +30,22 @@ function toPushPayload(text: string): { title: string; body: string } {
   return { title, body };
 }
 
-export async function sendSignalAlert(audience: string | null | undefined, text: string, keyboard?: InlineKeyboard) {
-  await sendToChannel(vipChannelId(), text, keyboard);
-  if (audience === "public") await sendToChannel(publicChannelId(), text, keyboard);
+// Owner request 2026-07-22: Telegram CHANNEL blasts (new signal + every BE/TP/SL/
+// timeout follow-up) are restricted to XAU and BTC only -- ETH/SOL signals still
+// get created, monitored, and shown on the web dashboard exactly as before, and
+// still trigger a real device push (push is a web/PWA delivery channel, not the
+// Telegram channel, so it's unaffected), they just never post to the Telegram
+// channel itself.
+export const CHANNEL_ONLY_PAIRS = ["XAUUSD", "BTCUSDT"];
+export function isChannelPair(pairKey: string): boolean {
+  return CHANNEL_ONLY_PAIRS.includes(pairKey);
+}
+
+export async function sendSignalAlert(pairKey: string, audience: string | null | undefined, text: string, keyboard?: InlineKeyboard) {
+  if (isChannelPair(pairKey)) {
+    await sendToChannel(vipChannelId(), text, keyboard);
+    if (audience === "public") await sendToChannel(publicChannelId(), text, keyboard);
+  }
 
   const { title, body } = toPushPayload(text);
   sendPushToAll({ title, body, url: "/dashboard/sinyal", tag: "qco2-signal" }).catch(() => null);
@@ -98,9 +111,9 @@ export async function advanceTp(
     const isFinal = lvl === tps.length;
     const price = tps[lvl - 1];
     if (isFinal) {
-      await sendSignalAlert(signal.audience, buildTelegramCloseMessage(pair, dir, `tp${lvl}`, price, decimals, signal.entry));
+      await sendSignalAlert(pair.key, signal.audience, buildTelegramCloseMessage(pair, dir, `tp${lvl}`, price, decimals, signal.entry));
     } else {
-      await sendSignalAlert(signal.audience, buildTPProgressMessage(pair, dir, lvl, price, decimals, signal.entry));
+      await sendSignalAlert(pair.key, signal.audience, buildTPProgressMessage(pair, dir, lvl, price, decimals, signal.entry));
     }
   }
 
@@ -130,7 +143,7 @@ export async function closeViaSl(
     .from("qco2_signals")
     .update({ status: "sl_hit", hit_level: "sl", closed_at: new Date().toISOString() })
     .eq("id", signal.id);
-  await sendSignalAlert(signal.audience, buildTelegramCloseMessage(pair, signal.direction, "sl", signal.stop_loss, decimals, signal.entry));
+  await sendSignalAlert(pair.key, signal.audience, buildTelegramCloseMessage(pair, signal.direction, "sl", signal.stop_loss, decimals, signal.entry));
   return { status: "fired" };
 }
 
@@ -155,7 +168,7 @@ export async function advanceBe(
   const livePrice = livePriceHint ?? (await getLivePriceForPair(pair.key, pair.dataInstId));
   const pipsRunning = signal.direction === "BUY" ? (livePrice - signal.entry) / pair.pipUnit : (signal.entry - livePrice) / pair.pipUnit;
 
-  await sendSignalAlert(signal.audience, buildBEMessage(pair, nextThreshold, pipsRunning, decimals));
+  await sendSignalAlert(pair.key, signal.audience, buildBEMessage(pair, nextThreshold, pipsRunning, decimals));
   await admin.from("qco2_signals").update({ be_alert_level: nextThreshold }).eq("id", signal.id);
   return { status: "fired", threshold: nextThreshold };
 }
