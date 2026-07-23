@@ -36,8 +36,11 @@ export interface XauAggressiveResult {
   tpPrices?: number[];
 }
 
-const SL_MIN_PIPS = 15;
-const SL_MAX_PIPS = 40;
+// SL fixed at 50 pips (owner spec 2026-07-24, "sl nya jauhin 50pips" -- the
+// dynamic 15-40 pip clamp based on EMA20/PSAR was too tight for gold's real M1/M5
+// noise, causing frequent whipsaw stop-outs in backtest, 12.5% winrate/-111 pips
+// over 3 days). TP1 stays dynamic off the Bollinger Band (realistic quick target).
+const SL_FIXED_PIPS = 50;
 const TP1_MIN_PIPS = 10;
 const TP1_MAX_PIPS = 25;
 
@@ -232,12 +235,8 @@ export function evaluateXauAggressive(
         : currentPrice - bbLower;
   const tp1Pips = clamp(Math.round(rawTp1Dist / pipUnit), TP1_MIN_PIPS, TP1_MAX_PIPS);
 
-  // SL: just outside the nearest protective level between EMA20 M1 and PSAR, plus a
-  // small buffer, clamped to a sane tight-scalp range.
-  const psarLevel = psarNow ? psarNow.sar : direction === "BUY" ? e20m1 : e20m1;
-  const protectiveLevel = direction === "BUY" ? Math.min(e20m1, psarLevel) : Math.max(e20m1, psarLevel);
-  const rawSlDist = direction === "BUY" ? currentPrice - protectiveLevel + 3 * pipUnit : protectiveLevel - currentPrice + 3 * pipUnit;
-  const slPips = clamp(Math.round(rawSlDist / pipUnit), SL_MIN_PIPS, SL_MAX_PIPS);
+  // SL fixed at 50 pips (see SL_FIXED_PIPS note above).
+  const slPips = SL_FIXED_PIPS;
 
   const entryOverride = currentPrice;
   const slPrice = direction === "BUY" ? entryOverride - slPips * pipUnit : entryOverride + slPips * pipUnit;
@@ -258,7 +257,7 @@ export function evaluateXauAggressive(
     direction,
     confidence,
     reasoning: `XAU Scalp: EMA9/20 M1+M5 align ${direction}, RSI M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}, PSAR ${psarAgrees ? "konfirmasi" : "belum align"}, ${bbNote}. Entry dekat harga live, SL ketat di luar EMA20/PSAR.`,
-    atr: rawSlDist,
+    atr: slPips * pipUnit,
     checklist,
     entryOverride,
     slPrice,

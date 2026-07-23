@@ -77,7 +77,7 @@ function trueRange(candles: Candle[]): number[] {
   });
 }
 
-function atrSeries(candles: Candle[], period = 14): number[] {
+export function atrSeries(candles: Candle[], period = 14): number[] {
   const tr = trueRange(candles);
   const out: number[] = new Array(tr.length).fill(NaN);
   let prev: number | null = null;

@@ -11,7 +11,8 @@ import {
 } from "@/lib/telegramApi";
 import { TELEGRAM_ADMIN_ID, vipChannelId, publicChannelId, SIGNAL_PAIR_OPTIONS, signalStatusKeyboard } from "@/lib/telegramBotConfig";
 import { SIGNAL_PAIRS } from "@/lib/signalPairs";
-import { getLivePriceForPair } from "@/lib/signalEngine";
+import { getLivePriceForPair, fetchOkxCandles } from "@/lib/signalEngine";
+import { atrSeries } from "@/lib/institutionalEngine";
 import { advanceTp, closeViaSl, advanceBe, decimalsFor, isChannelPair } from "@/lib/signalAlerts";
 import { sendPushToUser } from "@/lib/pushNotify";
 
@@ -262,11 +263,15 @@ function pairStepView(): { text: string; kb: InlineKeyboard } {
 
 function directionStepView(pair: string): { text: string; kb: InlineKeyboard } {
   return {
-    text: `📊 <b>BUAT SINYAL MANUAL</b>\n━━━━━━━━━━━━━━━━\n\nPair: <b>${pair}</b>\nStep 2/6 — Pilih arah:`,
+    text: `📊 <b>BUAT SINYAL MANUAL</b>\n━━━━━━━━━━━━━━━━\n\nPair: <b>${pair}</b>\nStep 2/6 — Pilih arah, atau tembak langsung di harga live:`,
     kb: [
       [
-        { text: "🟢 BUY", callback_data: "sig:dir:BUY" },
-        { text: "🔴 SELL", callback_data: "sig:dir:SELL" },
+        { text: "⚡ BUY NOW", callback_data: "sig:quick:BUY" },
+        { text: "⚡ SELL NOW", callback_data: "sig:quick:SELL" },
+      ],
+      [
+        { text: "🟢 BUY (ketik manual)", callback_data: "sig:dir:BUY" },
+        { text: "🔴 SELL (ketik manual)", callback_data: "sig:dir:SELL" },
       ],
       [CANCEL_BTN],
     ],
@@ -767,6 +772,52 @@ export async function POST(req: NextRequest) {
       session.data = { ...session.data, direction };
       const v = textPromptView(`Pair: <b>${session.data.pair}</b> | Arah: <b>${direction}</b>`, "Step 3/6 — Ketik harga ENTRY (contoh: 3950.5):");
       await editMessageText(chatId, messageId, v.text, v.kb);
+    } else if (data.startsWith("sig:quick:")) {
+      // BUY NOW / SELL NOW quick-fire (owner spec 2026-07-24, "jadi gua gaperlu
+      // ngetik manual ... langsung sinkron semuanya tanpa delay") -- entry = live
+      // price fetched right now, SL/TP computed with the SAME risk model each pair's
+      // auto-engine uses, zero typing. Skips straight to the audience step.
+      const direction = data.split(":")[2] as "BUY" | "SELL";
+      const pairLabel = session.data.pair as string;
+      const cfg = SIGNAL_PAIRS.find((p) => p.key === pairLabel);
+      if (!cfg) {
+        await editMessageText(chatId, messageId, "❌ Pair tidak dikenali.", [[CANCEL_BTN]]);
+      } else {
+        const livePrice = await getLivePriceForPair(cfg.key, cfg.dataInstId);
+        const decimals = cfg.pipUnit < 1 ? 2 : 0;
+        const round = (n: number) => Math.round(n * 10 ** decimals) / 10 ** decimals;
+        const entry = round(livePrice);
+
+        let sl: number;
+        let tps: number[];
+        if (cfg.key === "XAUUSD") {
+          // Matches the live XAU Decisive Scalping engine: SL fixed 50 pips.
+          const slDist = 50 * cfg.pipUnit;
+          sl = round(direction === "BUY" ? entry - slDist : entry + slDist);
+          tps = [30, 50, 70, 100].map((p) => round(direction === "BUY" ? entry + p * cfg.pipUnit : entry - p * cfg.pipUnit));
+        } else {
+          const { data: settingsRow } = await admin.from("qco2_engine_settings").select("atr_sl_multiplier, rr_targets").eq("id", 1).maybeSingle();
+          const atrSlMultiplier = Number(settingsRow?.atr_sl_multiplier) || 1.5;
+          const rrTargets: number[] = Array.isArray(settingsRow?.rr_targets) && settingsRow.rr_targets.length ? settingsRow.rr_targets : [2, 3, 4, 6];
+          const m5 = await fetchOkxCandles(cfg.dataInstId, "5m", 60);
+          const atrArr = atrSeries(m5, 14);
+          const atr = atrArr[atrArr.length - 1] || 0;
+          const slDist = atr * atrSlMultiplier;
+          sl = round(direction === "BUY" ? entry - slDist : entry + slDist);
+          if (cfg.key === "BTCUSDT") {
+            // BTC swing profile: fixed 150/200/500 pip TPs (matches the live auto engine).
+            tps = [150, 200, 500].map((p) => round(direction === "BUY" ? entry + p * cfg.pipUnit : entry - p * cfg.pipUnit));
+          } else {
+            tps = rrTargets.map((rr) => round(direction === "BUY" ? entry + slDist * rr : entry - slDist * rr));
+          }
+        }
+
+        session.data = { ...session.data, direction, entry, sl, tps };
+        session.state = "signal_audience";
+        const header = `Pair: <b>${session.data.pair}</b> | Entry: <b>${entry}</b> (live) | SL: <b>${sl}</b>\nTP: ${tps.join(", ")}`;
+        const v = audienceStepView(header);
+        await editMessageText(chatId, messageId, v.text, v.kb);
+      }
     } else if (data === "sig:tp:add") {
       session.state = "signal_tp_input";
       const tps = (session.data.tps || []) as number[];

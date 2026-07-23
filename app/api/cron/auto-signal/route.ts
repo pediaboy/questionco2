@@ -137,12 +137,13 @@ interface RiskSettings {
   atrSlMultiplier: number;
   rrTargets: number[];
   activePairs: string[];
+  autoSignalAudience: "vip" | "public";
 }
 
 async function loadEngineSettings(admin: ReturnType<typeof getSupabaseAdmin>): Promise<{ engine: EngineSettings; risk: RiskSettings }> {
   const { data } = await admin.from("qco2_engine_settings").select("*").eq("id", 1).maybeSingle();
   if (!data) {
-    return { engine: DEFAULT_ENGINE_SETTINGS, risk: { atrSlMultiplier: ATR_SL_MULTIPLIER, rrTargets: RR_TARGETS, activePairs: SIGNAL_PAIRS.map((p) => p.key) } };
+    return { engine: DEFAULT_ENGINE_SETTINGS, risk: { atrSlMultiplier: ATR_SL_MULTIPLIER, rrTargets: RR_TARGETS, activePairs: SIGNAL_PAIRS.map((p) => p.key), autoSignalAudience: "vip" } };
   }
   const fw = data.factor_weights as FactorWeights;
   return {
@@ -151,6 +152,9 @@ async function loadEngineSettings(admin: ReturnType<typeof getSupabaseAdmin>): P
       atrSlMultiplier: Number(data.atr_sl_multiplier) || ATR_SL_MULTIPLIER,
       rrTargets: Array.isArray(data.rr_targets) ? data.rr_targets : RR_TARGETS,
       activePairs: Array.isArray(data.active_pairs) ? data.active_pairs : SIGNAL_PAIRS.map((p) => p.key),
+      // Owner spec 2026-07-24: auto (AI) signals used to be hardcoded VIP-only --
+      // now admin-configurable from /engine-settings ("kirim ke publik/vip").
+      autoSignalAudience: data.auto_signal_audience === "public" ? "public" : "vip",
     },
   };
 }
@@ -444,7 +448,7 @@ async function processPair(
       source: "auto",
       status: "active",
       be_alert_level: 0,
-      audience: "vip",
+      audience: riskSettings.autoSignalAudience,
       confidence: result.confidence,
       reasoning: result.reasoning,
       strategy_mode: strategyMode,
@@ -460,6 +464,7 @@ async function processPair(
   // posted to the Telegram channel.
   if (isChannelPair(pair.key)) {
     await sendToChannel(vipChannelId(), message);
+    if (riskSettings.autoSignalAudience === "public") await sendToChannel(publicChannelId(), message);
   }
   await fanOutAlerts(admin, created.id, pair.label, result.direction, result.confidence, message.replace(/<[^>]+>/g, "")).catch(() => null);
   sendPushToAll({

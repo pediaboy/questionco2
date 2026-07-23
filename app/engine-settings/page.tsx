@@ -2,12 +2,13 @@
 
 import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { ArrowLeft, Cpu, Save, Loader2 } from "lucide-react";
+import { ArrowLeft, Cpu, Save, Loader2, Radio, Lock, Globe } from "lucide-react";
 import { isAdminAuthed } from "@/lib/adminAuth";
 
 interface Settings {
   confidence_min: number;
   active_pairs: string[];
+  auto_signal_audience: "vip" | "public";
 }
 
 export default function EngineSettingsPage() {
@@ -42,7 +43,11 @@ export default function EngineSettingsPage() {
     const res = await fetch("/api/admin/engine-settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confidence_min: settings.confidence_min, active_pairs: settings.active_pairs }),
+      body: JSON.stringify({
+        confidence_min: settings.confidence_min,
+        active_pairs: settings.active_pairs,
+        auto_signal_audience: settings.auto_signal_audience,
+      }),
     }).then((r) => r.json());
     setSaving(false);
     if (res.success) {
@@ -109,6 +114,34 @@ export default function EngineSettingsPage() {
         <p className="text-[10px] text-white/30 mt-1">
           Ambang batas sinyal fire. Sebelumnya di-tuning ke 76% via backtest OKX untuk target 4-10 sinyal/hari — turunkan
           untuk lebih sering, naikkan untuk lebih selektif.
+        </p>
+      </div>
+
+      <div className="border border-cyan-400/20 chamfer-sm bg-[#0b0f18]/70 p-4 mb-5">
+        <span className="text-xs font-bold text-white/80 uppercase tracking-wider flex items-center gap-2 mb-3">
+          <Radio size={13} className="text-cyan-300" /> Audience Sinyal Otomatis (AI)
+        </span>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => setSettings({ ...settings, auto_signal_audience: "vip" })}
+            className={`px-3 py-2.5 text-[11px] chamfer-sm border flex items-center justify-center gap-2 ${
+              settings.auto_signal_audience === "vip" ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-300" : "border-white/10 text-white/40"
+            }`}
+          >
+            <Lock size={12} /> VIP Only
+          </button>
+          <button
+            onClick={() => setSettings({ ...settings, auto_signal_audience: "public" })}
+            className={`px-3 py-2.5 text-[11px] chamfer-sm border flex items-center justify-center gap-2 ${
+              settings.auto_signal_audience === "public" ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-300" : "border-white/10 text-white/40"
+            }`}
+          >
+            <Globe size={12} /> VIP + Publik
+          </button>
+        </div>
+        <p className="text-[10px] text-white/30 mt-2">
+          Sebelumnya sinyal AI selalu VIP-only. Ini kontrol channel Telegram + audience field yang dipakai setiap sinyal
+          auto (XAU/BTC) baru dibuat — sinyal manual tetap punya pilihan audience sendiri di wizard bot.
         </p>
       </div>
 
