@@ -109,29 +109,21 @@ export async function POST(req: NextRequest) {
     const stepMs = BAR_MS["5m"];
     const windowMs = days * 24 * 60 * 60 * 1000;
 
-    let m5: Candle[], m1: Candle[] = [], h1: Candle[] = [];
-    if (isXau) {
-      // XAU SMC engine needs M5 (structure/FVG/liquidity sweep) + H1 (EMA200 trend,
-      // needs 210+ bars regardless of the requested backtest window -- fetch a fixed
-      // 300-bar H1 history so EMA200 is properly seeded well before simStart).
-      [m5, h1] = await Promise.all([
-        fetchOkxHistory(pair.dataInstId, "5m", Math.ceil(windowMs / BAR_MS["5m"]) + 100),
-        fetchOkxHistory(pair.dataInstId, "1H", 300),
-      ]);
-    } else {
-      [m5, m1] = await Promise.all([
-        fetchOkxHistory(pair.dataInstId, "5m", Math.ceil(windowMs / BAR_MS["5m"]) + 320),
-        fetchOkxHistory(pair.dataInstId, "1m", Math.ceil(windowMs / BAR_MS["1m"]) + 120),
-      ]);
-    }
+    // XAU's Decisive Scalping engine needs M1 (EMA9/20, RSI, BB, PSAR) + M5 (trend
+    // agreement) -- both pairs of data fetched the same way now, just different
+    // slice windows per engine below.
+    const [m5, m1] = await Promise.all([
+      fetchOkxHistory(pair.dataInstId, "5m", Math.ceil(windowMs / BAR_MS["5m"]) + (isXau ? 100 : 320)),
+      fetchOkxHistory(pair.dataInstId, "1m", Math.ceil(windowMs / BAR_MS["1m"]) + (isXau ? 200 : 120)),
+    ]);
 
-    if (m5.length < 250 || (isXau ? h1.length < 210 : m1.length < 120)) {
+    if (m5.length < 250 || m1.length < (isXau ? 60 : 120)) {
       return NextResponse.json({ success: false, error: "Data historis OKX tidak cukup untuk periode ini" }, { status: 502 });
     }
 
     const simStart = m5[m5.length - 1].ts - windowMs;
     const trades: SimTrade[] = [];
-    let i = isXau ? 60 : 220; // warm-up index, matches each engine's min-history requirement
+    let i = isXau ? 40 : 220; // warm-up index, matches each engine's min-history requirement
     let skipUntilIdx = -1;
 
     for (; i < m5.length; i += 1) {
@@ -141,18 +133,20 @@ export async function POST(req: NextRequest) {
 
       const m5Slice = isXau ? m5.slice(Math.max(0, i - 59), i + 1) : m5.slice(Math.max(0, i - 299), i + 1);
       const m1Slice = m1.filter((c) => c.ts <= t).slice(-(isXau ? 150 : 100));
-      if (m1Slice.length < (isXau ? 150 : 100) && m1Slice.length < 30) continue;
+      if (m1Slice.length < (isXau ? 30 : 100) && m1Slice.length < 30) continue;
 
       let direction: "BUY" | "SELL" | null = null;
       let atr = 0;
       let entryOverride: number | undefined;
+      let slPrice: number | undefined;
+      let tpPrices: number[] | undefined;
 
       if (isXau) {
-        const h1Slice = h1.filter((c) => c.ts <= t).slice(-210);
-        if (h1Slice.length < 210) continue;
-        const res = evaluateXauAggressive(m5Slice, h1Slice, false, pair.pipUnit, m5Slice[m5Slice.length - 1].close);
+        const res = evaluateXauAggressive(m1Slice, m5Slice, false, pair.pipUnit, m1Slice[m1Slice.length - 1].close);
         direction = res.direction;
         entryOverride = res.entryOverride;
+        slPrice = res.slPrice;
+        tpPrices = res.tpPrices;
       } else {
         const res = evaluateInstitutional(m5Slice, m1Slice, false, engineSettings, pair.pipUnit);
         direction = res.direction;
@@ -160,14 +154,11 @@ export async function POST(req: NextRequest) {
       }
       if (!direction) continue;
 
-      // XAU entry is the FVG-zone limit level (matches the live cron), never the
-      // raw close -- keeps backtest SL/TP anchored the same way the real engine does.
       const entry = isXau ? entryOverride ?? m5Slice[m5Slice.length - 1].close : m5Slice[m5Slice.length - 1].close;
       let sl: number, tps: number[];
       if (isXau) {
-        const slDist = 50 * pair.pipUnit;
-        sl = direction === "BUY" ? entry - slDist : entry + slDist;
-        tps = [30, 50, 70, 100].map((p) => (direction === "BUY" ? entry + p * pair.pipUnit : entry - p * pair.pipUnit));
+        sl = slPrice!;
+        tps = tpPrices!;
       } else if (pair.key === "BTCUSDT") {
         // Keep the backtest truthful to the live model (owner spec 2026-07-21: BTC
         // swing profile, fixed 150/200/500 pip TPs instead of ATR/RR multiples).
@@ -224,7 +215,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       pair: pair.label,
-      strategy: isXau ? "xau_smc_liquidity_fvg_v1" : "institutional_smc_v3",
+      strategy: isXau ? "xau_scalp_ema_bb_rsi_psar_v1" : "institutional_smc_v3",
       days,
       candlesEvaluated: m5.filter((c) => c.ts >= simStart).length,
       totalSignals: trades.length,

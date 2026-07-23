@@ -74,26 +74,22 @@ function buildInstitutionalSignalMessage(
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   const pips = (price: number) => Math.round(Math.abs(price - entry) / pair.pipUnit);
 
-  // XAU signals are now genuine LIMIT orders anchored to an FVG zone (owner spec
-  // 2026-07-22) -- label it explicitly as BUY LIMIT / SELL LIMIT instead of a plain
-  // market BUY/SELL, and drop the old cosmetic +/-3 pip buffer since `entry` IS
-  // already the exact FVG boundary, not a live-chased price.
-  const isXauLimit = pair.key === "XAUUSD";
-  const setupLabel = isXauLimit ? `${direction} LIMIT` : direction;
-
+  // XAU entries are now near-live-price scalp entries (owner spec 2026-07-24), not
+  // resting limit orders -- back to a plain BUY/SELL label with the standard
+  // cosmetic +/-3 pip entry-zone buffer. TP1 keeps the BEP note for XAU (still good
+  // practice: lock in the fast first target before the wider runners).
+  const isXau = pair.key === "XAUUSD";
   const zoneBuffer = 3 * pair.pipUnit;
-  const zoneLow = isXauLimit ? entry : direction === "SELL" ? entry : entry - zoneBuffer;
-  const zoneHigh = isXauLimit ? entry : direction === "SELL" ? entry + zoneBuffer : entry;
+  const zoneLow = direction === "SELL" ? entry : entry - zoneBuffer;
+  const zoneHigh = direction === "SELL" ? entry + zoneBuffer : entry;
 
-  // Owner spec 2026-07-22: TP1 must carry an explicit BEP note (move SL to entry)
-  // for XAU specifically.
   const tpLines = tps
-    .map((tp, i) => `   TP${i + 1}  ›  ${fmt(tp)}  (${pips(tp)} pips)${isXauLimit && i === 0 ? "  — Set BEP (geser SL ke Entry)" : ""}`)
+    .map((tp, i) => `   TP${i + 1}  ›  ${fmt(tp)}  (${pips(tp)} pips)${isXau && i === 0 ? "  — Set BEP (geser SL ke Entry)" : ""}`)
     .join("\n");
 
   return (
     `⚜️ <b>LASTQUESTION VVIP SIGNAL</b> ⚜️\n━━━━━━━━━━━━━━━━\n\n` +
-    `📊 PAIR    : ${pair.label}\n📈 SETUP   : <b>${setupLabel}</b>\n🎯 ENTRY   : ${isXauLimit ? fmt(zoneLow) : `${fmt(zoneLow)} – ${fmt(zoneHigh)}`}\n\n` +
+    `📊 PAIR    : ${pair.label}\n📈 SETUP   : <b>${direction}</b>\n🎯 ENTRY   : ${fmt(zoneLow)} – ${fmt(zoneHigh)}\n\n` +
     `🎯 TAKE PROFIT\n${tpLines}\n\n` +
     `🛑 STOP LOSS : ${fmt(sl)}  (${pips(sl)} pips)\n\n` +
     `⚠️ Gunakan money management.\nAmankan profit di TP1 / TP2, hindari overtrade.\n\n` +
@@ -364,21 +360,22 @@ async function processPair(
   }
 
   // 2. No active AUTO signal, cooldown cleared — evaluate a fresh trigger.
-  // XAUUSD gets its own dedicated SMC Liquidity Sweep + FVG engine (M5 structure +
-  // H1 EMA200 trend filter, owner spec 2026-07-22, full replacement of the old
-  // PSAR/momentum model). BTC/ETH/SOL keep using the Institutional SMC v3 model.
+  // XAUUSD gets its own dedicated Decisive Scalping engine (EMA9/20 M1+M5 alignment
+  // + Bollinger + RSI + PSAR, owner spec 2026-07-24, full replacement of the SMC
+  // Liquidity Sweep + FVG + EMA200 H1 model from 2026-07-22 which went 3 days with
+  // zero signals -- too selective). BTC/ETH/SOL keep using Institutional SMC v3.
   const isXauAggressive = pair.key === "XAUUSD";
 
-  let result: { direction: "BUY" | "SELL" | null; confidence: number; reasoning: string; atr: number; blockReason?: string; entryOverride?: number };
+  let result: { direction: "BUY" | "SELL" | null; confidence: number; reasoning: string; atr: number; blockReason?: string; entryOverride?: number; slPrice?: number; tpPrices?: number[] };
   let strategyMode: string;
 
   if (isXauAggressive) {
-    const [m5Xau, h1Xau] = await Promise.all([
-      fetchOkxCandles(pair.dataInstId, "5m", 300),
-      fetchOkxCandles(pair.dataInstId, "1H", 300),
+    const [m1Xau, m5Xau] = await Promise.all([
+      fetchOkxCandles(pair.dataInstId, "1m", 150),
+      fetchOkxCandles(pair.dataInstId, "5m", 60),
     ]);
-    result = evaluateXauAggressive(m5Xau, h1Xau, newsBlackout, pair.pipUnit, livePrice);
-    strategyMode = "xau_smc_liquidity_fvg_v1";
+    result = evaluateXauAggressive(m1Xau, m5Xau, newsBlackout, pair.pipUnit, livePrice);
+    strategyMode = "xau_scalp_ema_bb_rsi_psar_v1";
   } else {
     const [m5, m1] = await Promise.all([
       fetchOkxCandles(pair.dataInstId, "5m", 300),
@@ -398,27 +395,18 @@ async function processPair(
     };
   }
 
-  // XAU's entry is the FVG-zone limit level (top of FVG for BUY, bottom for SELL)
-  // computed by the engine itself -- never the raw live price -- so the fixed-pip
-  // SL/TP below are anchored to the actual limit-order fill, not a chased extreme.
   const entry = isXauAggressive ? result.entryOverride ?? livePrice : livePrice;
 
-  // XAU Aggressive uses a FIXED pip risk model (owner spec 2026-07-20, "TP/SL kedeketan,
-  // ga sesuai pasar buat agresif" -- ATR-based sizing was producing SL/TP too close
-  // together): SL is ALWAYS 50 pips. TP1=30, TP2=50, TP3=70, TP4(max)=100 pips -- note
-  // TP1 < SL is intentional (owner wants a fast partial-profit lock before the wider
-  // runner targets), not a mistake. Other pairs keep the existing ATR-based sizing.
+  // XAU: SL/TP come straight from the engine itself -- SL just outside the nearest
+  // EMA20/PSAR level, TP1 a realistic quick Bollinger-band target, TP2-4 wider
+  // runners off that same base (owner spec 2026-07-24, matches the manual
+  // "cutloss ketat di luar MA/Bollinger, TP cepat dan realistis" analysis format).
+  // Other pairs keep their existing sizing.
   let sl: number;
   let tps: number[];
   if (isXauAggressive) {
-    const slPips = 50;
-    const tpPipsList = [30, 50, 70, 100];
-    const slDistance = slPips * pair.pipUnit;
-    sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;
-    tps =
-      result.direction === "BUY"
-        ? tpPipsList.map((p) => entry + p * pair.pipUnit)
-        : tpPipsList.map((p) => entry - p * pair.pipUnit);
+    sl = result.slPrice!;
+    tps = result.tpPrices!;
   } else if (pair.key === "BTCUSDT") {
     // BTC swing-trade profile (owner request 2026-07-21, "buat swing target tp1
     // 150pip tp2 200pip tp3 500pip") -- fixed pip TP ladder instead of ATR/RR

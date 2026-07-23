@@ -1,34 +1,26 @@
-// XAU SMC Liquidity Sweep + FVG Engine — dedicated M5/H1 strategy for XAUUSD ONLY,
-// per owner spec 2026-07-22 ("jangan sampe ngaco lagi"). Full replacement of the
-// previous PSAR/momentum-chasing model, which kept buying tops and selling bottoms
-// (owner complaint 2026-07-21). BTC/ETH/SOL keep using the Institutional SMC v3
-// model (lib/institutionalEngine.ts) unchanged.
+// XAU Decisive Scalping Engine — M1/M5 EMA9/20 trend alignment + Bollinger Bands +
+// RSI + PSAR, per owner's exact manual-analysis spec (2026-07-24, "ubah biar sama
+// seperti yang gua kirim barusan setingannya"). Full replacement of the SMC
+// Liquidity Sweep + FVG + EMA200 H1 model (2026-07-22), which was too selective and
+// produced ZERO signals over 3 straight days ("3 hari ga ada sinyal sama sekali").
+// This model is deliberately decisive: it fires a direction whenever M1 + M5 trend
+// agree, rather than waiting for a rare multi-layer confluence. XAU ONLY —
+// BTC/ETH/SOL keep using Institutional SMC v3 (lib/institutionalEngine.ts).
 //
-// LAYER 1 — SMC Liquidity Sweep & FVG (the ONLY setup, order-only, never a chase):
-//   BUY:  Liquidity Sweep at a recent M5 swing low (wick breaks below it, closes
-//         back above) followed by a Bullish FVG (3-candle gap: candle1.high <
-//         candle3.low). Entry = TOP of the FVG (candle3.low) — a BUY LIMIT, filled
-//         only once price actually retraces back down INTO the gap.
-//   SELL: Liquidity Sweep at a recent M5 swing high (wick breaks above it, closes
-//         back below) followed by a Bearish FVG (candle1.low > candle3.high).
-//         Entry = BOTTOM of the FVG (candle3.high) — a SELL LIMIT, filled only
-//         once price retraces back up INTO the gap.
-//   Instant market orders at a fresh extreme are explicitly never fired — the
-//   engine only returns a direction once live price has actually traded back INTO
-//   the FVG zone (i.e., the limit would already be filled), never while price is
-//   still out at the sweep extreme.
-//
-// LAYER 2 — EMA200 H1 trend filter (HARD gate, no exceptions):
-//   BUY only valid if price > EMA200 H1. SELL only valid if price < EMA200 H1.
-//
-// LAYER 3 — Momentum & volatility guard (HARD gates):
-//   RSI(14) M5: forbidden to BUY if RSI > 60, forbidden to SELL if RSI < 40.
-//   ATR(14) M5 must clear a minimum floor (avoid dead/sideways tape).
-//   The FVG's breakout candle volume must exceed its own 10-candle volume MA
-//   (avoid a low-conviction, low-volume gap).
-//
-// Risk model (unchanged, fixed pips, set by app/api/cron/auto-signal/route.ts):
-// SL 50 pips / TP1 30 / TP2 50 / TP3 70 / TP4 100 — TP1 note: move SL to entry (BEP).
+// 1. TREN MIKRO M1 & M5 (core trigger): EMA9 vs EMA20 alignment on BOTH M1 and M5
+//    must agree (both bullish or both bearish), and price must still be on the
+//    correct side of EMA20 M1. Disagreement = no trade (choppy/transitioning).
+// 2. RSI MOMENTUM: confirms, doesn't gate except at true exhaustion extremes
+//    (forbid fresh BUY if RSI M1>78 or RSI M5>75; forbid fresh SELL if RSI M1<22 or
+//    RSI M5<25) — loose enough to keep firing in a healthy trend.
+// 3. PSAR: confirmation bonus/penalty on confidence, not a hard gate (PSAR flips
+//    fast and would kill frequency if treated as a blocker).
+// 4. BOLLINGER BANDS (M1, 20/2): position vs the band decides whether price is at
+//    a normal pullback (full confidence) or already extended past the band
+//    (breakout/possible-fakeout — still tradeable, slightly reduced confidence,
+//    noted in reasoning). Also drives the realistic quick TP1 target and the
+//    tight SL (placed just outside the nearest MA/PSAR — "cutloss ketat di luar MA
+//    atau Bollinger terdekat").
 
 import { Candle, ema } from "./signalEngine";
 
@@ -39,10 +31,15 @@ export interface XauAggressiveResult {
   atr: number;
   checklist: { label: string; pass: boolean }[];
   blockReason?: string;
-  entryOverride?: number; // FVG-zone limit entry (top of FVG for BUY, bottom for SELL)
+  entryOverride?: number;
+  slPrice?: number;
+  tpPrices?: number[];
 }
 
-const MIN_ATR_PIPS = 8; // minimum M5 ATR, in pips, to consider the market volatile enough to trade
+const SL_MIN_PIPS = 15;
+const SL_MAX_PIPS = 40;
+const TP1_MIN_PIPS = 10;
+const TP1_MAX_PIPS = 25;
 
 function rsi(closes: number[], period = 14): number[] {
   const out: number[] = new Array(closes.length).fill(NaN);
@@ -68,83 +65,72 @@ function rsi(closes: number[], period = 14): number[] {
   return out;
 }
 
-function atrSeries(candles: Candle[], period = 14): number[] {
-  const out: number[] = new Array(candles.length).fill(NaN);
-  const trs: number[] = [];
-  for (let i = 0; i < candles.length; i++) {
-    if (i === 0) {
-      trs.push(candles[i].high - candles[i].low);
-      continue;
-    }
-    const tr = Math.max(
-      candles[i].high - candles[i].low,
-      Math.abs(candles[i].high - candles[i - 1].close),
-      Math.abs(candles[i].low - candles[i - 1].close)
-    );
-    trs.push(tr);
-  }
-  if (trs.length <= period) return out;
-  let avg = trs.slice(1, period + 1).reduce((a, b) => a + b, 0) / period;
-  out[period] = avg;
-  for (let i = period + 1; i < trs.length; i++) {
-    avg = (avg * (period - 1) + trs[i]) / period;
-    out[i] = avg;
+function sma(values: number[], period: number): number[] {
+  const out: number[] = new Array(values.length).fill(NaN);
+  for (let i = period - 1; i < values.length; i++) {
+    out[i] = values.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period;
   }
   return out;
 }
 
-// Liquidity sweep: a candle wicks beyond the highest-high/lowest-low of the
-// preceding `lookback` candles, then closes back on the other side -- a classic
-// stop-hunt before reversal. Scans the last `scanBack` candles for the most recent
-// occurrence (returns its index so the FVG search can start from there).
-function findLiquiditySweep(candles: Candle[], lookback = 12, scanBack = 8): { direction: "BUY" | "SELL"; index: number } | null {
-  const last = candles.length - 1;
-  const earliest = Math.max(lookback + 1, last - scanBack);
-  for (let i = last; i >= earliest; i--) {
-    const window = candles.slice(i - lookback, i);
-    const swingHigh = Math.max(...window.map((c) => c.high));
-    const swingLow = Math.min(...window.map((c) => c.low));
-    const c = candles[i];
-    if (c.high > swingHigh && c.close < swingHigh) return { direction: "SELL", index: i };
-    if (c.low < swingLow && c.close > swingLow) return { direction: "BUY", index: i };
+function bollinger(closes: number[], period = 20, mult = 2): { upper: number[]; lower: number[]; mid: number[] } {
+  const mid = sma(closes, period);
+  const upper: number[] = new Array(closes.length).fill(NaN);
+  const lower: number[] = new Array(closes.length).fill(NaN);
+  for (let i = period - 1; i < closes.length; i++) {
+    const slice = closes.slice(i - period + 1, i + 1);
+    const mean = mid[i];
+    const variance = slice.reduce((a, b) => a + (b - mean) ** 2, 0) / period;
+    const sd = Math.sqrt(variance);
+    upper[i] = mean + mult * sd;
+    lower[i] = mean - mult * sd;
   }
-  return null;
+  return { upper, lower, mid };
 }
 
-interface Fvg { top: number; bottom: number; index: number }
-
-// Bullish FVG: 3-candle gap where candle1.high < candle3.low. Zone = [candle1.high,
-// candle3.low]; entry (top of FVG) = candle3.low.
-function findBullishFvg(candles: Candle[], fromIdx: number, toIdx: number): Fvg | null {
-  for (let i = toIdx; i >= Math.max(2, fromIdx); i--) {
-    const c1 = candles[i - 2];
-    const c3 = candles[i];
-    if (c1.high < c3.low) return { top: c3.low, bottom: c1.high, index: i };
+// Standard parabolic SAR (0.02 step / 0.2 max), returns bull/bear state + level per candle.
+function psarSeries(candles: Candle[], step = 0.02, max = 0.2): { bull: boolean; sar: number }[] {
+  const out: { bull: boolean; sar: number }[] = [];
+  if (candles.length < 2) return out;
+  let bull = candles[1].close >= candles[0].close;
+  let af = step;
+  let ep = bull ? candles[0].high : candles[0].low;
+  let sar = bull ? candles[0].low : candles[0].high;
+  for (let i = 1; i < candles.length; i++) {
+    sar = sar + af * (ep - sar);
+    if (bull) {
+      if (candles[i].low < sar) {
+        bull = false;
+        sar = ep;
+        ep = candles[i].low;
+        af = step;
+      } else if (candles[i].high > ep) {
+        ep = candles[i].high;
+        af = Math.min(af + step, max);
+      }
+    } else {
+      if (candles[i].high > sar) {
+        bull = true;
+        sar = ep;
+        ep = candles[i].high;
+        af = step;
+      } else if (candles[i].low < ep) {
+        ep = candles[i].low;
+        af = Math.min(af + step, max);
+      }
+    }
+    out.push({ bull, sar });
   }
-  return null;
+  return out;
 }
 
-// Bearish FVG: candle1.low > candle3.high. Zone = [candle3.high, candle1.low];
-// entry (bottom of FVG) = candle3.high.
-function findBearishFvg(candles: Candle[], fromIdx: number, toIdx: number): Fvg | null {
-  for (let i = toIdx; i >= Math.max(2, fromIdx); i--) {
-    const c1 = candles[i - 2];
-    const c3 = candles[i];
-    if (c1.low > c3.high) return { top: c1.low, bottom: c3.high, index: i };
-  }
-  return null;
-}
-
-function volumeMaBefore(candles: Candle[], idx: number, period = 10): number {
-  const start = Math.max(0, idx - period);
-  const window = candles.slice(start, idx);
-  if (window.length === 0) return 0;
-  return window.reduce((a, b) => a + b.volume, 0) / window.length;
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 export function evaluateXauAggressive(
+  m1: Candle[],
   m5: Candle[],
-  h1: Candle[],
   newsBlackout: boolean,
   pipUnit: number = 0.1,
   livePrice?: number
@@ -154,133 +140,128 @@ export function evaluateXauAggressive(
   if (newsBlackout) {
     return { direction: null, confidence: 0, reasoning: "Blocked: high-impact news window", atr: 0, checklist, blockReason: "News blackout aktif" };
   }
-  if (m5.length < 40) {
-    return { direction: null, confidence: 0, reasoning: "Not enough M5 data yet", atr: 0, checklist, blockReason: "Data M5 belum cukup" };
-  }
-  if (h1.length < 210) {
-    return { direction: null, confidence: 0, reasoning: "Not enough H1 data yet for EMA200", atr: 0, checklist, blockReason: "Data H1 belum cukup" };
+  if (m1.length < 30 || m5.length < 30) {
+    return { direction: null, confidence: 0, reasoning: "Not enough M1/M5 data yet", atr: 0, checklist, blockReason: "Data belum cukup" };
   }
 
-  const closes = m5.map((c) => c.close);
-  const last = m5.length - 1;
-  const currentPrice = livePrice ?? closes[last];
+  const m1Closes = m1.map((c) => c.close);
+  const m5Closes = m5.map((c) => c.close);
+  const l1 = m1.length - 1;
+  const l5 = m5.length - 1;
+  const currentPrice = livePrice ?? m1Closes[l1];
 
-  // ---- LAYER 1: Liquidity Sweep -> FVG (order-only setup) ----
-  const sweep = findLiquiditySweep(m5, 12, 8);
-  checklist.push({ label: "Liquidity Sweep (Swing Low/High M5)", pass: sweep !== null });
+  const ema9M1 = ema(m1Closes, 9);
+  const ema20M1 = ema(m1Closes, 20);
+  const ema9M5 = ema(m5Closes, 9);
+  const ema20M5 = ema(m5Closes, 20);
+  const rsiM1 = rsi(m1Closes, 14);
+  const rsiM5 = rsi(m5Closes, 14);
+  const bbM1 = bollinger(m1Closes, 20, 2);
+  const psarM1 = psarSeries(m1, 0.02, 0.2);
 
-  if (!sweep) {
+  const e9m1 = ema9M1[l1];
+  const e20m1 = ema20M1[l1];
+  const e9m5 = ema9M5[l5];
+  const e20m5 = ema20M5[l5];
+
+  // ---- 1. TREN MIKRO M1 & M5 (core trigger) ----
+  const m1Bull = e9m1 > e20m1;
+  const m1Bear = e9m1 < e20m1;
+  const m5Bull = e9m5 > e20m5;
+  const m5Bear = e9m5 < e20m5;
+
+  let direction: "BUY" | "SELL" | null = null;
+  if (m1Bull && m5Bull && currentPrice > e20m1) direction = "BUY";
+  else if (m1Bear && m5Bear && currentPrice < e20m1) direction = "SELL";
+
+  checklist.push({ label: "Tren M1 (EMA9 vs EMA20)", pass: m1Bull || m1Bear });
+  checklist.push({ label: "Tren M5 (EMA9 vs EMA20)", pass: m5Bull || m5Bear });
+  checklist.push({ label: "M1 & M5 Sejalan", pass: direction !== null });
+
+  if (!direction) {
     return {
       direction: null,
       confidence: 0,
-      reasoning: "Belum ada Liquidity Sweep di swing low/high M5 — NO TRADE",
+      reasoning: `Tren M1 (${m1Bull ? "bullish" : m1Bear ? "bearish" : "flat"}) & M5 (${m5Bull ? "bullish" : m5Bear ? "bearish" : "flat"}) belum sejalan — NO TRADE, tunggu struktur jelas`,
       atr: 0,
       checklist,
-      blockReason: "Belum ada Liquidity Sweep",
+      blockReason: "Tren M1/M5 belum sejalan",
     };
   }
 
-  const fvg = sweep.direction === "BUY" ? findBullishFvg(m5, sweep.index, last) : findBearishFvg(m5, sweep.index, last);
-  checklist.push({ label: `${sweep.direction === "BUY" ? "Bullish" : "Bearish"} FVG / Order Block`, pass: fvg !== null });
+  // ---- 2. RSI momentum (veto only at true exhaustion extremes) ----
+  const rsiNowM1 = rsiM1[l1];
+  const rsiNowM5 = rsiM5[l5];
+  const rsiExhausted =
+    direction === "BUY" ? rsiNowM1 > 78 || rsiNowM5 > 75 : rsiNowM1 < 22 || rsiNowM5 < 25;
+  checklist.push({ label: "RSI Belum Exhausted", pass: !rsiExhausted });
 
-  if (!fvg) {
+  if (rsiExhausted) {
     return {
       direction: null,
-      confidence: 0,
-      reasoning: `Liquidity Sweep ${sweep.direction} terdeteksi tapi FVG belum terbentuk — NO TRADE, tunggu`,
+      confidence: 20,
+      reasoning: `Tren ${direction} sejalan tapi RSI sudah exhausted (M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}) — NO TRADE, tunggu koreksi dulu`,
       atr: 0,
       checklist,
-      blockReason: "FVG belum terbentuk setelah sweep",
+      blockReason: "RSI exhausted",
     };
   }
 
-  const direction = sweep.direction;
-  const entryLevel = direction === "BUY" ? fvg.top : fvg.bottom;
+  // ---- 3. PSAR (confirmation bonus, not a hard gate) ----
+  const psarNow = psarM1[psarM1.length - 1];
+  const psarAgrees = psarNow ? (direction === "BUY" ? psarNow.bull : !psarNow.bull) : false;
+  checklist.push({ label: "PSAR Konfirmasi Arah", pass: psarAgrees });
 
-  // Price must have ACTUALLY retraced back into the FVG zone -- this is what
-  // guarantees the "limit order" would already be filled, and is the hard block
-  // against ever recommending a market order at a fresh extreme (owner: "dilarang
-  // keras merekomendasikan instant market order saat harga di pucuk/dasar").
-  const inZone = currentPrice >= fvg.bottom && currentPrice <= fvg.top;
-  checklist.push({ label: `Harga Retrace ke Area FVG (${direction === "BUY" ? "Top" : "Bottom"})`, pass: inZone });
+  // ---- 4. Bollinger position -> entry sizing, SL, TP1 ----
+  const bbUpper = bbM1.upper[l1];
+  const bbLower = bbM1.lower[l1];
+  const bandWidth = bbUpper - bbLower;
+  const extendedPastBand = direction === "BUY" ? currentPrice > bbUpper : currentPrice < bbLower;
+  checklist.push({ label: "Belum Extended dari Bollinger (bukan fakeout risk)", pass: !extendedPastBand });
 
-  if (!inZone) {
-    return {
-      direction: null,
-      confidence: 30,
-      reasoning: `Setup ${direction} valid (Sweep + FVG) tapi harga belum retrace ke area FVG (limit ${entryLevel.toFixed(2)}) — NO TRADE, tunggu limit terisi`,
-      atr: 0,
-      checklist,
-      blockReason: "Harga belum masuk area FVG (limit belum terisi)",
-    };
-  }
+  // TP1: realistic quick target = distance to the band in the trade direction; if
+  // price already blew past the band (breakout in progress), fall back to a
+  // fraction of the band width instead of a negative/zero distance.
+  const rawTp1Dist =
+    direction === "BUY"
+      ? extendedPastBand
+        ? bandWidth * 0.5
+        : bbUpper - currentPrice
+      : extendedPastBand
+        ? bandWidth * 0.5
+        : currentPrice - bbLower;
+  const tp1Pips = clamp(Math.round(rawTp1Dist / pipUnit), TP1_MIN_PIPS, TP1_MAX_PIPS);
 
-  // ---- LAYER 2: EMA200 H1 trend filter (hard gate) ----
-  const h1Closes = h1.map((c) => c.close);
-  const ema200Arr = ema(h1Closes, 200);
-  const ema200 = ema200Arr[ema200Arr.length - 1];
-  const trendOk = direction === "BUY" ? currentPrice > ema200 : currentPrice < ema200;
-  checklist.push({ label: "EMA200 H1 Trend Filter", pass: trendOk });
+  // SL: just outside the nearest protective level between EMA20 M1 and PSAR, plus a
+  // small buffer, clamped to a sane tight-scalp range.
+  const psarLevel = psarNow ? psarNow.sar : direction === "BUY" ? e20m1 : e20m1;
+  const protectiveLevel = direction === "BUY" ? Math.min(e20m1, psarLevel) : Math.max(e20m1, psarLevel);
+  const rawSlDist = direction === "BUY" ? currentPrice - protectiveLevel + 3 * pipUnit : protectiveLevel - currentPrice + 3 * pipUnit;
+  const slPips = clamp(Math.round(rawSlDist / pipUnit), SL_MIN_PIPS, SL_MAX_PIPS);
 
-  if (!trendOk) {
-    return {
-      direction: null,
-      confidence: 25,
-      reasoning: `Setup ${direction} (Sweep + FVG, harga di zona) tapi melawan EMA200 H1 (${ema200.toFixed(2)}) — NO TRADE`,
-      atr: 0,
-      checklist,
-      blockReason: "Melawan EMA200 H1",
-    };
-  }
+  const entryOverride = currentPrice;
+  const slPrice = direction === "BUY" ? entryOverride - slPips * pipUnit : entryOverride + slPips * pipUnit;
+  const tpPipsList = [tp1Pips, tp1Pips + 15, tp1Pips + 30, tp1Pips + 50];
+  const tpPrices = tpPipsList.map((p) => (direction === "BUY" ? entryOverride + p * pipUnit : entryOverride - p * pipUnit));
 
-  // ---- LAYER 3: Momentum & volatility guard (hard gates) ----
-  const rsiArr = rsi(closes, 14);
-  const rsiNow = rsiArr[last];
-  const rsiOk = direction === "BUY" ? rsiNow <= 60 : rsiNow >= 40;
-  checklist.push({ label: "RSI(14) M5 Filter (Buy<=60 / Sell>=40)", pass: rsiOk });
+  // Confidence: base + bonuses. No hard multi-layer gate anymore -- decisive by design.
+  let confidence = 68;
+  if (psarAgrees) confidence += 10;
+  if (direction === "BUY" ? rsiNowM1 >= 50 && rsiNowM1 <= 72 : rsiNowM1 <= 50 && rsiNowM1 >= 28) confidence += 8;
+  if (!extendedPastBand) confidence += 6;
+  else confidence -= 5; // extended past band = possible fakeout, still tradeable but noted
+  confidence = clamp(confidence, 45, 92);
 
-  const atrArr = atrSeries(m5, 14);
-  const atrNow = atrArr[last] || atrArr.filter((v) => !Number.isNaN(v)).slice(-1)[0] || 0;
-  const atrPips = atrNow / pipUnit;
-  const atrOk = atrPips >= MIN_ATR_PIPS;
-  checklist.push({ label: `ATR(14) M5 Minimum (>=${MIN_ATR_PIPS} pips)`, pass: atrOk });
-
-  const volMa10 = volumeMaBefore(m5, fvg.index, 10);
-  const breakoutVolume = m5[fvg.index]?.volume ?? 0;
-  const volumeOk = volMa10 > 0 && breakoutVolume > volMa10;
-  checklist.push({ label: "Volume Konfirmasi > MA Volume(10)", pass: volumeOk });
-
-  if (!rsiOk || !atrOk || !volumeOk) {
-    const reasons = [
-      !rsiOk ? `RSI(14) ${rsiNow.toFixed(1)} ${direction === "BUY" ? "> 60" : "< 40"}` : null,
-      !atrOk ? `ATR ${atrPips.toFixed(1)} pips < min ${MIN_ATR_PIPS}` : null,
-      !volumeOk ? "volume breakout <= MA(10)" : null,
-    ].filter(Boolean);
-    return {
-      direction: null,
-      confidence: 30,
-      reasoning: `Setup ${direction} valid (Sweep+FVG+EMA200) tapi diblok Layer 3: ${reasons.join(", ")} — NO TRADE`,
-      atr: atrNow,
-      checklist,
-      blockReason: reasons.join(", "),
-    };
-  }
-
-  // All 3 layers passed. Fixed base confidence (hard-gate system, no partial
-  // credit) + small bonuses for extra confluence strength.
-  let confidence = 78;
-  if (breakoutVolume > volMa10 * 1.5) confidence += 6;
-  if (atrPips >= MIN_ATR_PIPS * 1.5) confidence += 4;
-  if (direction === "BUY" && rsiNow <= 50) confidence += 4;
-  if (direction === "SELL" && rsiNow >= 50) confidence += 4;
-  confidence = Math.min(94, confidence);
+  const bbNote = extendedPastBand ? "harga sudah extend lewat band (waspada fakeout)" : "harga masih di area normal pullback dalam band";
 
   return {
     direction,
     confidence,
-    reasoning: `XAU SMC: Liquidity Sweep ${direction} + ${direction === "BUY" ? "Bullish" : "Bearish"} FVG (limit ${entryLevel.toFixed(2)}) + EMA200 H1 align + RSI ${rsiNow.toFixed(1)} + ATR ${atrPips.toFixed(1)}p + volume confirm`,
-    atr: atrNow,
+    reasoning: `XAU Scalp: EMA9/20 M1+M5 align ${direction}, RSI M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}, PSAR ${psarAgrees ? "konfirmasi" : "belum align"}, ${bbNote}. Entry dekat harga live, SL ketat di luar EMA20/PSAR.`,
+    atr: rawSlDist,
     checklist,
-    entryOverride: entryLevel,
+    entryOverride,
+    slPrice,
+    tpPrices,
   };
 }
