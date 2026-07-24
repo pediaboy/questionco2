@@ -48,6 +48,13 @@ export const metadata: Metadata = {
     ],
     apple: [{ url: "/icons/apple-touch-icon.png" }],
   },
+  // Facebook domain verification (Business Manager > Brand Safety > Domains).
+  // Rendered via Next's Metadata API `other` so it's static server-rendered HTML
+  // in <head> on the homepage, not injected client-side by JS -- Facebook's
+  // crawler requires that (a JS-injected tag fails verification).
+  other: {
+    "facebook-domain-verification": "m6arb5l37neip2zwlfr0yosx3wdhuh",
+  },
 };
 
 export default function RootLayout({
