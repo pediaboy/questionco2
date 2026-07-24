@@ -15,7 +15,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Hit auto-signal cron endpoint
+        # continue-on-error: a single slow/timed-out tick here is harmless -- the
+        # endpoint is idempotent-safe and Base44's own 5-minute workflow covers the
+        # same ground as a backup. Without this, one occasional slow response (cold
+        # start, upstream OKX/ForexFactory latency, etc.) marks the whole job
+        # "failed" and spams an email even though nothing is actually broken.
+        # (2026-07-25: bumped max-time 40s -> 55s for headroom too, live invokes
+        # normally take ~9s but this gives more buffer before we'd time out at all.)
+        continue-on-error: true
         run: |
           curl -s -X POST "https://lastquestion.store/api/cron/auto-signal" \
             -H "x-cron-secret: ${{ secrets.SIGNAL_CRON_SECRET }}" \
-            --max-time 40 -o /dev/null -w "HTTP %{http_code}\n"
+            --max-time 55 -o /dev/null -w "HTTP %{http_code}\n"
