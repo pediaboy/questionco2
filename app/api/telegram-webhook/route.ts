@@ -1092,6 +1092,16 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Diagnostics-only: ?diag=<CRON_SECRET> calls Telegram getWebhookInfo so we can
+  // check for delivery lag/pending updates without ever exposing the bot token.
+  const diagKey = req.nextUrl.searchParams.get("diag");
+  if (diagKey && diagKey === "7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d") {
+    const token = process.env.TELEGRAM_SIGNAL_BOT_TOKEN;
+    if (!token) return NextResponse.json({ ok: false, error: "no token" });
+    const res = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+    const json = await res.json();
+    return NextResponse.json(json);
+  }
   return NextResponse.json({ ok: true, service: "telegram-webhook" });
 }
