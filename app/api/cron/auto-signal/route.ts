@@ -9,7 +9,7 @@ import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
 import { sendToChannel } from "@/lib/telegramApi";
 import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
 import { sendPushToAll } from "@/lib/pushNotify";
-import { sendSignalAlert, advanceTp, closeViaSl, advanceBe, BE_THRESHOLDS, isChannelPair } from "@/lib/signalAlerts";
+import { sendSignalAlert, advanceTp, closeViaSl, isChannelPair } from "@/lib/signalAlerts";
 import { checkPriceAlarms } from "@/lib/priceAlarms";
 
 export const dynamic = "force-dynamic";
@@ -259,22 +259,11 @@ async function monitorOneSignal(
     return { pair: pair.key, source: active.source, action: "timeout", age_min: Math.round(ageMin), still_active: false };
   }
 
-  // Check running pips for Break-Even alert thresholds (20 / 50 / 70) -- loop calls
-  // the SAME advanceBe() the admin's manual BE button uses, one step at a time,
-  // while the live pips still qualify for the next threshold (handles a fast move
-  // that jumps past 20 AND 50 in a single tick, firing both).
+  // Owner request 2026-07-27: BE alert now fires exactly ONCE, tied directly to
+  // TP1 (handled inside advanceTp() above, in the `newTpLevel > oldTpLevel` block)
+  // -- no more separate repeating pip-ladder BE checks here.
   const pipsRunning =
     dir === "BUY" ? (livePrice - active.entry) / pair.pipUnit : (active.entry - livePrice) / pair.pipUnit;
-
-  let guard = 0;
-  while (guard++ < BE_THRESHOLDS.length) {
-    const currentLevel: number = active.be_alert_level || 0;
-    const nextThreshold = BE_THRESHOLDS.find((t) => t > currentLevel);
-    if (!nextThreshold || pipsRunning < nextThreshold) break;
-    const res = await advanceBe(admin, pair, decimals, active, livePrice);
-    if (res.status !== "fired") break;
-    active.be_alert_level = res.threshold;
-  }
 
   return { pair: pair.key, source: active.source, action: "monitoring", live_price: livePrice, pips_running: Math.round(pipsRunning), still_active: true };
 }

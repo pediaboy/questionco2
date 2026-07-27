@@ -12,7 +12,7 @@ const PAIR_LABEL: Record<string, string> = {
   SOLUSDT: "SOL/USDT",
 };
 
-const BE_PIPS = 20; // matches the real signal system's first BE threshold (see lib/signalAlerts.ts BE_THRESHOLDS)
+const BE_PIPS = 20; // portfolio display heuristic only, independent of the Telegram BE alert (which is now a single TP1-triggered flag, see lib/signalAlerts.ts)
 
 // Deterministic per-entry "modal" (USD notional) derived from lot_size, so the dollar
 // amount shown is always proportional to the lot -- fixes the earlier bug where lot and

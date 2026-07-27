@@ -121,18 +121,15 @@ Entry: ${fmtPrice(sig.entry, decimals)}`;
     return `${sig.pair} ${dir} | Live ${fmtPrice(livePrice, decimals)}\n${tpLines}\nSL ${slPips} pips${nextLine}`;
   }
 
-  // kind === "be"
-  const BE_THRESHOLDS = [20, 50, 70];
-  const level: number = sig.be_alert_level || 0;
-  const nextThreshold = BE_THRESHOLDS.find((t) => t > level);
+  // kind === "be" -- owner request 2026-07-27: BE is now a single flag tied to
+  // TP1, not a repeating pip ladder.
+  const beFired: boolean = (sig.be_alert_level || 0) >= 1;
   return (
     `${sig.pair} ${dir} — Status BE
 ` +
     `Running: ${pipsRunning >= 0 ? "+" : ""}${pipsRunning} pips
 ` +
-    `Level BE tercapai: ${level > 0 ? level + " pips (AKTIF)" : "belum"}
-` +
-    `${nextThreshold ? "Next level: " + nextThreshold + " pips" : "Sudah level maksimal"}`
+    `BE: ${beFired ? "AKTIF (TP1 tercapai)" : "belum -- menunggu TP1"}`
   );
 }
 
@@ -556,9 +553,9 @@ export async function POST(req: NextRequest) {
         const res = await advanceBe(admin, cfg, decimals, sig);
         msg =
           res.status === "fired"
-            ? `BE alert (level ${res.threshold}) terkirim ke channel.`
+            ? "BE alert terkirim ke channel."
             : res.status === "already"
-            ? "Semua level BE sudah terkirim."
+            ? "BE sudah pernah terkirim untuk sinyal ini."
             : "Sinyal ini sudah closed sebelumnya.";
       }
 

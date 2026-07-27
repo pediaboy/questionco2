@@ -12,7 +12,11 @@ import { vipChannelId, publicChannelId } from "@/lib/telegramBotConfig";
 import { getLivePriceForPair } from "@/lib/signalEngine";
 import { sendPushToAll } from "@/lib/pushNotify";
 
-export const BE_THRESHOLDS = [20, 50, 70]; // first level lowered 30->20 per owner request 2026-07-20
+// Owner request 2026-07-27: BE alert must fire EXACTLY ONCE per signal, tied to
+// TP1 (not a repeating pip-distance ladder anymore -- the old [20,50,70] threshold
+// system fired multiple "amankan posisi" alerts as price ran, which felt spammy).
+// be_alert_level is now just a 0/1 flag: 0 = not yet fired, 1 = fired (forever after).
+export const BE_FIRE_AT_TP_LEVEL = 1;
 
 export function decimalsFor(pair: PairConfig): number {
   return pair.pipUnit < 1 ? 2 : 0;
@@ -78,9 +82,9 @@ export function buildTPProgressMessage(pair: PairConfig, direction: "BUY" | "SEL
   );
 }
 
-export function buildBEMessage(pair: PairConfig, threshold: number, pipsRunning: number, decimals: number) {
+export function buildBEMessage(pair: PairConfig, pipsRunning: number, decimals: number) {
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: decimals });
-  return `🔐 <b>AMANKAN POSISI — SET BE</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 RUNNING  : ${fmt(pipsRunning)} ${pair.pipLabelSuffix}\n🎯 TRIGGER  : ${threshold} ${pair.pipLabelSuffix}\n\n✅ Posisi sudah masuk area aman.\nGeser SL ke entry (Break Even) untuk mengunci modal.`;
+  return `🔐 <b>AMANKAN POSISI — SET BE</b>\n━━━━━━━━━━━━━━━━\n\n📊 PAIR     : ${pair.label}\n📈 RUNNING  : ${fmt(pipsRunning)} ${pair.pipLabelSuffix}\n🎯 TP1 tercapai\n\n✅ Posisi sudah aman.\nGeser SL ke entry (Break Even) untuk mengunci modal.`;
 }
 
 function tpArray(signal: Record<string, any>): number[] {
@@ -106,6 +110,11 @@ export async function advanceTp(
   if (targetLevel <= oldLevel) return { status: "already" };
 
   const dir = signal.direction as "BUY" | "SELL";
+  // Owner request 2026-07-27: BE alert fires exactly ONCE, the moment TP1 is
+  // crossed -- tied directly to the same advanceTp() call (auto AND the admin's
+  // manual TP1 button both trigger it identically), no more separate repeating
+  // pip-ladder BE alerts.
+  const willCrossTp1 = oldLevel < 1 && targetLevel >= 1 && !(signal.be_alert_level >= 1);
 
   for (let lvl = oldLevel + 1; lvl <= targetLevel; lvl++) {
     const isFinal = lvl === tps.length;
@@ -115,17 +124,30 @@ export async function advanceTp(
     } else {
       await sendSignalAlert(pair.key, signal.audience, buildTPProgressMessage(pair, dir, lvl, price, decimals, signal.entry));
     }
+    if (lvl === 1 && willCrossTp1) {
+      const pipsRunning = dir === "BUY" ? (price - signal.entry) / pair.pipUnit : (signal.entry - price) / pair.pipUnit;
+      await sendSignalAlert(pair.key, signal.audience, buildBEMessage(pair, pipsRunning, decimals));
+    }
   }
 
   if (targetLevel === tps.length) {
     await admin
       .from("qco2_signals")
-      .update({ status: "tp_hit", hit_level: `tp${targetLevel}`, tp_alert_level: targetLevel, closed_at: new Date().toISOString() })
+      .update({
+        status: "tp_hit",
+        hit_level: `tp${targetLevel}`,
+        tp_alert_level: targetLevel,
+        closed_at: new Date().toISOString(),
+        ...(willCrossTp1 ? { be_alert_level: 1 } : {}),
+      })
       .eq("id", signal.id);
     return { status: "fired", closed: true, level: targetLevel };
   }
 
-  await admin.from("qco2_signals").update({ tp_alert_level: targetLevel }).eq("id", signal.id);
+  await admin
+    .from("qco2_signals")
+    .update({ tp_alert_level: targetLevel, ...(willCrossTp1 ? { be_alert_level: 1 } : {}) })
+    .eq("id", signal.id);
   return { status: "fired", closed: false, level: targetLevel };
 }
 
@@ -147,28 +169,26 @@ export async function closeViaSl(
   return { status: "fired" };
 }
 
-/** Advances exactly ONE BE threshold step (the next unfired one in BE_THRESHOLDS).
- * Cron calls this in a loop while the live pips still qualify (so a fast move that
- * jumps straight past 20 AND 50 in one tick still fires both, one call per step).
- * The admin manual BE button calls it once per press. If `livePriceHint` isn't
- * given (manual button path has no live price in-hand), fetches a fresh one so the
- * manual alert always shows the true real-time running pips, same as automatic. */
+/** Admin-only manual override: fires the single BE alert on demand (e.g. admin
+ * wants to call it early, before TP1 actually prints). Fires at most ONCE per
+ * signal, same as the automatic TP1-triggered path in advanceTp() -- both write
+ * the same be_alert_level=1 flag so neither can double-fire after the other. If
+ * `livePriceHint` isn't given (manual button path has no live price in-hand),
+ * fetches a fresh one so the manual alert always shows true real-time pips. */
 export async function advanceBe(
   admin: ReturnType<typeof getSupabaseAdmin>,
   pair: PairConfig,
   decimals: number,
   signal: Record<string, any>,
   livePriceHint?: number
-): Promise<{ status: "fired" | "already" | "closed_other"; threshold?: number }> {
+): Promise<{ status: "fired" | "already" | "closed_other" }> {
   if (signal.status !== "active") return { status: "closed_other" };
-  const oldLevel: number = signal.be_alert_level || 0;
-  const nextThreshold = BE_THRESHOLDS.find((t) => t > oldLevel);
-  if (!nextThreshold) return { status: "already" };
+  if (signal.be_alert_level >= 1) return { status: "already" };
 
   const livePrice = livePriceHint ?? (await getLivePriceForPair(pair.key, pair.dataInstId));
   const pipsRunning = signal.direction === "BUY" ? (livePrice - signal.entry) / pair.pipUnit : (signal.entry - livePrice) / pair.pipUnit;
 
-  await sendSignalAlert(pair.key, signal.audience, buildBEMessage(pair, nextThreshold, pipsRunning, decimals));
-  await admin.from("qco2_signals").update({ be_alert_level: nextThreshold }).eq("id", signal.id);
-  return { status: "fired", threshold: nextThreshold };
+  await sendSignalAlert(pair.key, signal.audience, buildBEMessage(pair, pipsRunning, decimals));
+  await admin.from("qco2_signals").update({ be_alert_level: 1 }).eq("id", signal.id);
+  return { status: "fired" };
 }
