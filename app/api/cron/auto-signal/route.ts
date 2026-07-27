@@ -485,12 +485,7 @@ async function processPair(
   };
 }
 
-export async function POST(req: NextRequest) {
-  const secret = req.headers.get("x-cron-secret");
-  if (secret !== CRON_SECRET) {
-    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
-  }
-
+async function runAutoSignalCore() {
   const admin = getSupabaseAdmin();
   const [newsBlackout, sessionChange, settings] = await Promise.all([
     isNewsBlackout(),
@@ -513,5 +508,45 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ success: true, news_blackout: newsBlackout, session_change: sessionChange, results });
+  return { success: true, news_blackout: newsBlackout, session_change: sessionChange, results };
+}
+
+export async function POST(req: NextRequest) {
+  const secret = req.headers.get("x-cron-secret");
+  if (secret !== CRON_SECRET) {
+    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  const out = await runAutoSignalCore();
+  return NextResponse.json(out);
+}
+
+// Owner request 2026-07-27: Base44's scheduled-workflow dispatcher started silently
+// cancelling every scheduled run (0 steps executed) platform-wide, and the GitHub
+// Actions cron backup can lag 1-4h on a public repo's free scheduler queue -- both
+// are outside our control. This GET is a THIRD, self-contained trigger: any logged-in
+// member's dashboard tab pings it every ~15s (see useSignalHeartbeat hook), piggy-
+// backing real traffic into a de-facto sub-minute tick with zero new infra/accounts.
+// No secret required (safe: same idempotent evaluate-or-monitor logic, no destructive
+// side effects) but debounced via the latest qco2_engine_logs timestamp so concurrent
+// tabs/users don't cause duplicate OKX/Supabase load -- only actually runs the core
+// tick if the last one was >12s ago, otherwise returns {skipped:true} near-instantly.
+export async function GET() {
+  const admin = getSupabaseAdmin();
+  const { data: lastLog } = await admin
+    .from("qco2_engine_logs")
+    .select("created_at")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (lastLog?.created_at) {
+    const secsSince = (Date.now() - new Date(lastLog.created_at).getTime()) / 1000;
+    if (secsSince < 12) {
+      return NextResponse.json({ success: true, skipped: true, secs_since_last: Math.round(secsSince) });
+    }
+  }
+
+  const out = await runAutoSignalCore();
+  return NextResponse.json(out);
 }

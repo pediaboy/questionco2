@@ -6,10 +6,12 @@ import { MemberAuthProvider, useMemberAuth } from "@/lib/MemberAuthContext";
 import MemberHeader from "@/components/MemberHeader";
 import MemberBottomNav from "@/components/MemberBottomNav";
 import SyncIndicator from "@/components/SyncIndicator";
+import { useSignalHeartbeat } from "@/lib/useSignalHeartbeat";
 
 function MemberLayoutContent({ children }: { children: React.ReactNode }) {
   const { loading, notLoggedIn } = useMemberAuth();
   const router = useRouter();
+  useSignalHeartbeat();
 
   useEffect(() => {
     if (notLoggedIn) {
