@@ -448,9 +448,9 @@ async function processPair(
   if (error) return { pair: pair.key, action: "error", error: error.message };
 
   const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, "none", result.confidence, result.reasoning, []);
-  // Owner request 2026-07-22: Telegram channel blasts only for XAU + BTC -- ETH/SOL
+  // Owner request 2026-07-28: Telegram channel blasts only for XAU -- BTC/ETH/SOL
   // still get created, monitored, pushed (web) and shown on the dashboard, just not
-  // posted to the Telegram channel.
+  // posted to the Telegram channel/group.
   if (isChannelPair(pair.key)) {
     await sendToChannel(vipChannelId(), message);
     if (riskSettings.autoSignalAudience === "public") await sendToChannel(publicChannelId(), message);

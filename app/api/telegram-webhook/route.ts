@@ -863,7 +863,7 @@ export async function POST(req: NextRequest) {
         await editMessageText(chatId, messageId, `❌ Gagal simpan sinyal: ${error.message}`, [[BACK_BTN]]);
       } else {
         const msg = buildSignalMessage(d.pair, d.direction, d.entry, d.sl, tps);
-        // Owner request 2026-07-22: Telegram channel only for XAU + BTC -- ETH/SOL
+        // Owner request 2026-07-28: Telegram channel only for XAU -- BTC/ETH/SOL
         // manual signals still save + push + show on web, just skip the channel post.
         if (isChannelPair(d.pair)) {
           await sendToChannel(vipChannelId(), msg);

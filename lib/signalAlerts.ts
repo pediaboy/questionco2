@@ -34,13 +34,12 @@ function toPushPayload(text: string): { title: string; body: string } {
   return { title, body };
 }
 
-// Owner request 2026-07-22: Telegram CHANNEL blasts (new signal + every BE/TP/SL/
-// timeout follow-up) are restricted to XAU and BTC only -- ETH/SOL signals still
-// get created, monitored, and shown on the web dashboard exactly as before, and
-// still trigger a real device push (push is a web/PWA delivery channel, not the
-// Telegram channel, so it's unaffected), they just never post to the Telegram
-// channel itself.
-export const CHANNEL_ONLY_PAIRS = ["XAUUSD", "BTCUSDT"];
+// Owner request 2026-07-28: Telegram CHANNEL blasts (new signal + every BE/TP/SL/
+// timeout follow-up) are restricted to XAU ONLY -- BTC/ETH/SOL signals still get
+// created, monitored, and shown on the web dashboard exactly as before, and still
+// trigger a real device push (push is a web/PWA delivery channel, not the Telegram
+// channel, so it's unaffected), they just never post to the Telegram group/channel.
+export const CHANNEL_ONLY_PAIRS = ["XAUUSD"];
 export function isChannelPair(pairKey: string): boolean {
   return CHANNEL_ONLY_PAIRS.includes(pairKey);
 }
