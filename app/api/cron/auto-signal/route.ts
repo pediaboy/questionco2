@@ -443,24 +443,37 @@ async function processPair(
     tps = result.tpPrices!;
   } else if (pair.key === "BTCUSDT") {
     // BTC swing-trade profile (owner request 2026-07-21, "buat swing target tp1
-    // 150pip tp2 200pip tp3 500pip") -- fixed pip TP ladder instead of ATR/RR
-    // multiples, replacing the old 4-target RR system for BTC specifically. SL
-    // stays ATR-based (owner didn't specify a new SL, only the 3 TP levels) --
-    // only 3 TPs now, no TP4 runner.
-    const slDistance = result.atr * riskSettings.atrSlMultiplier;
-    sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;
+    // 150pip tp2 200pip tp3 500pip") -- fixed pip TP ladder, only 3 TPs (no TP4).
+    //
+    // FIX 2026-07-29 (owner: "los nya benerin, banyakin win nya" -- 0 win / 31
+    // loss across BTC+ETH+SOL today, every single trade stopped out in 3-44min):
+    // SL was ATR(M5,14)*1.5, which measured only ~$95-166 for BTC today -- far
+    // TIGHTER than the pair's own documented fixed-pip risk model (slPips=50 *
+    // pipUnit=4 = $200, see signalPairs.ts). A short-lookback M5 ATR routinely
+    // compresses below normal noise, so the stop got hunted almost immediately,
+    // long before price could travel the full 150-500 pip swing target. Now uses
+    // the SAME fixed 50-pip SL as XAUUSD/manual pairs (the exact fix that solved
+    // this identical whipsaw failure mode for XAU on 2026-07-24) instead of ATR.
+    sl = result.direction === "BUY" ? entry - pair.slPips * pair.pipUnit : entry + pair.slPips * pair.pipUnit;
     const swingTpPips = [150, 200, 500];
     tps =
       result.direction === "BUY"
         ? swingTpPips.map((p) => entry + p * pair.pipUnit)
         : swingTpPips.map((p) => entry - p * pair.pipUnit);
   } else {
-    const slDistance = result.atr * riskSettings.atrSlMultiplier;
-    sl = result.direction === "BUY" ? entry - slDistance : entry + slDistance;
+    // ETHUSDT/SOLUSDT FIX 2026-07-29 (same root cause as BTC above): ATR(M5,14)*1.5
+    // was measuring ~$4-7 for ETH and ~$0.15-0.22 for SOL -- roughly HALF the
+    // pair's own documented fixed 50-pip SL, and paired with far RR targets
+    // (2/3/4/6x that tiny distance) that were essentially unreachable before the
+    // tight stop got hit by normal noise. Switched to the pair's fixed pip model
+    // (slPips=50, tpPips=[50,100,200] from signalPairs.ts) -- same proven fix as
+    // XAU and BTC above, sane achievable RR (1:1, 1:2, 1:4) instead of 1:6 stretch
+    // targets that were never realistically reachable intraday.
+    sl = result.direction === "BUY" ? entry - pair.slPips * pair.pipUnit : entry + pair.slPips * pair.pipUnit;
     tps =
       result.direction === "BUY"
-        ? riskSettings.rrTargets.map((rr) => entry + slDistance * rr)
-        : riskSettings.rrTargets.map((rr) => entry - slDistance * rr);
+        ? pair.tpPips.map((p) => entry + p * pair.pipUnit)
+        : pair.tpPips.map((p) => entry - p * pair.pipUnit);
   }
 
   const { data: created, error } = await admin
