@@ -167,28 +167,40 @@ export function evaluateXauAggressive(
   const e9m5 = ema9M5[l5];
   const e20m5 = ema20M5[l5];
 
-  // ---- 1. TREN MIKRO M1 & M5 (core trigger) ----
+  // ---- 1. TREN MIKRO M1 (core trigger) + M5 sebagai KONFIRMASI, bukan hard gate ----
+  // Fix 2026-07-29: sebelumnya M1 DAN M5 wajib sama-sama searah (AND-gate). M5
+  // pakai EMA yang jauh lebih lambat/lagging -- begitu M5 udah condong ke satu arah
+  // dia "nyangkut" di situ cukup lama, jadi requirement AND ini bikin sinyal
+  // nyaris selalu ikut arah M5 (macro-ish) dan nge-block valid SELL setup di M1
+  // selama M5 belum ikut berbalik. Hasil nyata: 42 BUY vs 8 SELL dari 50 sinyal
+  // terakhir, padahal candle harga real di window yang sama nyaris seimbang
+  // (36 naik vs 28 turun). Sekarang M1 jadi trigger utama (sama seperti niat awal
+  // "TREN MIKRO M1" di komentar atas), M5 cuma jadi bonus/penalti confidence --
+  // biar model tetap "decisive" dan gak buta arah SELL cuma karena M5 lambat ikut.
   const m1Bull = e9m1 > e20m1;
   const m1Bear = e9m1 < e20m1;
   const m5Bull = e9m5 > e20m5;
   const m5Bear = e9m5 < e20m5;
 
   let direction: "BUY" | "SELL" | null = null;
-  if (m1Bull && m5Bull && currentPrice > e20m1) direction = "BUY";
-  else if (m1Bear && m5Bear && currentPrice < e20m1) direction = "SELL";
+  if (m1Bull && currentPrice > e20m1) direction = "BUY";
+  else if (m1Bear && currentPrice < e20m1) direction = "SELL";
+
+  const m5Agrees = direction === "BUY" ? m5Bull : direction === "SELL" ? m5Bear : false;
+  const m5Opposes = direction === "BUY" ? m5Bear : direction === "SELL" ? m5Bull : false;
 
   checklist.push({ label: "Tren M1 (EMA9 vs EMA20)", pass: m1Bull || m1Bear });
-  checklist.push({ label: "Tren M5 (EMA9 vs EMA20)", pass: m5Bull || m5Bear });
-  checklist.push({ label: "M1 & M5 Sejalan", pass: direction !== null });
+  checklist.push({ label: "Harga vs EMA20 M1", pass: direction !== null });
+  checklist.push({ label: "Tren M5 Konfirmasi (bonus, bukan wajib)", pass: m5Agrees });
 
   if (!direction) {
     return {
       direction: null,
       confidence: 0,
-      reasoning: `Tren M1 (${m1Bull ? "bullish" : m1Bear ? "bearish" : "flat"}) & M5 (${m5Bull ? "bullish" : m5Bear ? "bearish" : "flat"}) belum sejalan — NO TRADE, tunggu struktur jelas`,
+      reasoning: `Tren M1 (${m1Bull ? "bullish" : m1Bear ? "bearish" : "flat"}) belum jelas / harga belum di sisi EMA20 M1 yang benar — NO TRADE, tunggu struktur jelas`,
       atr: 0,
       checklist,
-      blockReason: "Tren M1/M5 belum sejalan",
+      blockReason: "Tren M1 belum jelas",
     };
   }
 
@@ -245,18 +257,21 @@ export function evaluateXauAggressive(
 
   // Confidence: base + bonuses. No hard multi-layer gate anymore -- decisive by design.
   let confidence = 68;
+  if (m5Agrees) confidence += 10; // M5 confirms M1 -- stronger multi-timeframe alignment
+  else if (m5Opposes) confidence -= 12; // M1 scalp against the slower M5 read -- still tradeable, flagged riskier
   if (psarAgrees) confidence += 10;
   if (direction === "BUY" ? rsiNowM1 >= 50 && rsiNowM1 <= 72 : rsiNowM1 <= 50 && rsiNowM1 >= 28) confidence += 8;
   if (!extendedPastBand) confidence += 6;
   else confidence -= 5; // extended past band = possible fakeout, still tradeable but noted
-  confidence = clamp(confidence, 45, 92);
+  confidence = clamp(confidence, 40, 92);
 
   const bbNote = extendedPastBand ? "harga sudah extend lewat band (waspada fakeout)" : "harga masih di area normal pullback dalam band";
+  const m5Note = m5Agrees ? "M5 konfirmasi searah" : m5Opposes ? "M1 scalp melawan tren M5 (lebih riskan, confidence dikurangi)" : "M5 netral/flat";
 
   return {
     direction,
     confidence,
-    reasoning: `XAU Scalp: EMA9/20 M1+M5 align ${direction}, RSI M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}, PSAR ${psarAgrees ? "konfirmasi" : "belum align"}, ${bbNote}. Entry dekat harga live, SL ketat di luar EMA20/PSAR.`,
+    reasoning: `XAU Scalp: EMA9/20 M1 ${direction} (${m5Note}), RSI M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}, PSAR ${psarAgrees ? "konfirmasi" : "belum align"}, ${bbNote}. Entry dekat harga live, SL ketat di luar EMA20/PSAR.`,
     atr: slPips * pipUnit,
     checklist,
     entryOverride,

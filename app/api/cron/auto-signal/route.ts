@@ -250,10 +250,19 @@ async function monitorOneSignal(
   // let it keep running toward its final target / SL instead of force-closing a
   // signal that's already deep in profit just because the clock ran out.
   if (ageMin >= timeoutMins && currentTpLevel < 3) {
-    await admin
+    // Same CAS fix as lib/signalAlerts.ts -- claim the timeout close atomically
+    // (WHERE status='active') BEFORE sending, so 2 concurrent pollers can't both
+    // fire the timeout alert for the same signal.
+    const { data: claimed, error: claimErr } = await admin
       .from("qco2_signals")
       .update({ status: "timeout", hit_level: "timeout", closed_at: new Date().toISOString() })
-      .eq("id", active.id);
+      .eq("id", active.id)
+      .eq("status", "active")
+      .select("id");
+
+    if (claimErr || !claimed || claimed.length === 0) {
+      return { pair: pair.key, source: active.source, action: "already_closed", still_active: false };
+    }
 
     await sendSignalAlert(pair.key, active.audience, buildTimeoutMessage(timeoutMins));
     return { pair: pair.key, source: active.source, action: "timeout", age_min: Math.round(ageMin), still_active: false };

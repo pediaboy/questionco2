@@ -114,6 +114,36 @@ export async function advanceTp(
   // manual TP1 button both trigger it identically), no more separate repeating
   // pip-ladder BE alerts.
   const willCrossTp1 = oldLevel < 1 && targetLevel >= 1 && !(signal.be_alert_level >= 1);
+  const isFullyClosed = targetLevel === tps.length;
+
+  // Fix 2026-07-29 (duplicate-alert bug): with 3 redundant pollers (client
+  // heartbeat, GitHub Actions long-poll, Base44 workflow) all hitting this same
+  // monitor endpoint, two requests can land close enough together that BOTH read
+  // the signal row with the same old tp_alert_level BEFORE either one's DB write
+  // commits -- so both then send the Telegram alert (the double "TP1 TERCAPAI" /
+  // "AMANKAN POSISI" messages the owner saw). Fix: claim the level with a single
+  // atomic conditional UPDATE (WHERE tp_alert_level = oldLevel) FIRST. Postgres
+  // only lets ONE concurrent request's WHERE clause match -- whichever request's
+  // update actually affects a row wins the right to send the alert; the other
+  // request sees 0 rows affected and skips sending entirely.
+  const { data: claimed, error: claimErr } = await admin
+    .from("qco2_signals")
+    .update({
+      tp_alert_level: targetLevel,
+      ...(isFullyClosed
+        ? { status: "tp_hit", hit_level: `tp${targetLevel}`, closed_at: new Date().toISOString() }
+        : {}),
+      ...(willCrossTp1 ? { be_alert_level: 1 } : {}),
+    })
+    .eq("id", signal.id)
+    .eq("tp_alert_level", oldLevel)
+    .eq("status", "active")
+    .select("id");
+
+  if (claimErr || !claimed || claimed.length === 0) {
+    // Another concurrent poller already claimed and is sending this exact level.
+    return { status: "already" };
+  }
 
   for (let lvl = oldLevel + 1; lvl <= targetLevel; lvl++) {
     const isFinal = lvl === tps.length;
@@ -129,25 +159,7 @@ export async function advanceTp(
     }
   }
 
-  if (targetLevel === tps.length) {
-    await admin
-      .from("qco2_signals")
-      .update({
-        status: "tp_hit",
-        hit_level: `tp${targetLevel}`,
-        tp_alert_level: targetLevel,
-        closed_at: new Date().toISOString(),
-        ...(willCrossTp1 ? { be_alert_level: 1 } : {}),
-      })
-      .eq("id", signal.id);
-    return { status: "fired", closed: true, level: targetLevel };
-  }
-
-  await admin
-    .from("qco2_signals")
-    .update({ tp_alert_level: targetLevel, ...(willCrossTp1 ? { be_alert_level: 1 } : {}) })
-    .eq("id", signal.id);
-  return { status: "fired", closed: false, level: targetLevel };
+  return { status: "fired", closed: isFullyClosed, level: targetLevel };
 }
 
 /** SL always takes priority and closes immediately -- real stop-out regardless of
@@ -160,10 +172,15 @@ export async function closeViaSl(
   signal: Record<string, any>
 ): Promise<{ status: "fired" | "closed_other" }> {
   if (signal.status !== "active") return { status: "closed_other" };
-  await admin
+  // Same CAS fix as advanceTp() -- claim the close atomically (WHERE status='active')
+  // BEFORE sending the alert, so two concurrent pollers can't both fire the SL message.
+  const { data: claimed, error: claimErr } = await admin
     .from("qco2_signals")
     .update({ status: "sl_hit", hit_level: "sl", closed_at: new Date().toISOString() })
-    .eq("id", signal.id);
+    .eq("id", signal.id)
+    .eq("status", "active")
+    .select("id");
+  if (claimErr || !claimed || claimed.length === 0) return { status: "closed_other" };
   await sendSignalAlert(pair.key, signal.audience, buildTelegramCloseMessage(pair, signal.direction, "sl", signal.stop_loss, decimals, signal.entry));
   return { status: "fired" };
 }
@@ -184,10 +201,20 @@ export async function advanceBe(
   if (signal.status !== "active") return { status: "closed_other" };
   if (signal.be_alert_level >= 1) return { status: "already" };
 
+  // Same CAS fix -- claim the BE flag atomically (WHERE be_alert_level < 1) BEFORE
+  // sending, so two concurrent pollers/admin-button-presses can't both fire it.
+  const { data: claimed, error: claimErr } = await admin
+    .from("qco2_signals")
+    .update({ be_alert_level: 1 })
+    .eq("id", signal.id)
+    .eq("status", "active")
+    .lt("be_alert_level", 1)
+    .select("id");
+  if (claimErr || !claimed || claimed.length === 0) return { status: "already" };
+
   const livePrice = livePriceHint ?? (await getLivePriceForPair(pair.key, pair.dataInstId));
   const pipsRunning = signal.direction === "BUY" ? (livePrice - signal.entry) / pair.pipUnit : (signal.entry - livePrice) / pair.pipUnit;
 
   await sendSignalAlert(pair.key, signal.audience, buildBEMessage(pair, pipsRunning, decimals));
-  await admin.from("qco2_signals").update({ be_alert_level: 1 }).eq("id", signal.id);
   return { status: "fired" };
 }
