@@ -1,0 +1,25 @@
+name: Daily Recap Backup
+
+# Owner request 2026-07-29 ("malem rekap harian harus bagus wr nya"): discovered
+# the Base44-scheduled "Auto Signal Daily Recap" workflow has been silently
+# CANCELLED by the platform every single day since 2026-07-22 (7 straight days,
+# 0 steps run each time -- same "Base44 intermittently blocks/cancels scheduled
+# cron jobs" issue already hit with the signal engine itself). The recap Telegram
+# message has effectively not been sent in over a week. Same fix pattern as
+# fast-signal-ping.yml: a GitHub Actions daily cron as an independent backup that
+# doesn't depend on Base44's scheduler at all. Fires once at 23:55 WIB (16:55 UTC),
+# matching the original intended recap time.
+on:
+  schedule:
+    - cron: "55 16 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  recap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger daily signal recap
+        run: |
+          curl -s -X POST "https://lastquestion.store/api/cron/signal-recap-daily" \
+            -H "x-cron-secret: 7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d" \
+            --max-time 30 -w "\nHTTP %{http_code}\n"
