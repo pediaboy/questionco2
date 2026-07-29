@@ -15,11 +15,15 @@ export async function POST(req: NextRequest) {
   const admin = getSupabaseAdmin();
   const now = new Date();
 
+  // XAU-only (owner request 2026-07-29, same reasoning as the daily recap): the
+  // Telegram group only ever receives XAUUSD signals (CHANNEL_ONLY_PAIRS in
+  // lib/signalAlerts.ts) -- BTC/ETH/SOL are dashboard-only.
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const { data: rows, error } = await admin
     .from("qco2_signals")
     .select("pair, status, hit_level, closed_at, created_at")
     .eq("source", "auto")
+    .eq("pair", "XAUUSD")
     .neq("status", "active")
     .gte("closed_at", sevenDaysAgo.toISOString());
 

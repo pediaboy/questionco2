@@ -16,10 +16,15 @@ export async function POST(req: NextRequest) {
   const now = new Date();
   const todayStr = wibDayString(now);
 
+  // XAU-only (owner request 2026-07-29): the Telegram group only ever receives
+  // XAUUSD signals (CHANNEL_ONLY_PAIRS in lib/signalAlerts.ts) -- BTC/ETH/SOL are
+  // dashboard-only, so including them in the channel recap was confusing/irrelevant
+  // for that audience.
   const { data: rows, error } = await admin
     .from("qco2_signals")
     .select("pair, status, hit_level, closed_at, created_at")
     .eq("source", "auto")
+    .eq("pair", "XAUUSD")
     .neq("status", "active");
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 });
