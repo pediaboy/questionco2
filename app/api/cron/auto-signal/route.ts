@@ -123,12 +123,41 @@ async function checkSessionChange(admin: ReturnType<typeof getSupabaseAdmin>) {
     return { changed: false };
   }
 
+  // Fix 2026-07-29 (duplicate "PERGANTIAN SESI PASAR" alert): same race as the
+  // signal TP/SL/BE alerts -- with 3 concurrent pollers (client heartbeat, GitHub
+  // Actions, Base44 workflow) hitting this endpoint, two requests can both read the
+  // same `previous` session state before either writes back, so both detect
+  // "changed" and both send. CAS guard: claim the state row FIRST via a write
+  // that's only valid if it still matches the exact updated_at we just read (or
+  // the row doesn't exist yet) -- only the request that wins the claim sends.
+  const prevUpdatedAt = stateRow?.updated_at ?? null;
+  const nowIso = new Date().toISOString();
+  let claimed: { id: string }[] | null = null;
+
+  if (prevUpdatedAt) {
+    const { data } = await admin
+      .from("qco2_session_state")
+      .update({ active_sessions: active, updated_at: nowIso })
+      .eq("id", "singleton")
+      .eq("updated_at", prevUpdatedAt)
+      .select("id");
+    claimed = data;
+  } else {
+    const { data, error } = await admin
+      .from("qco2_session_state")
+      .insert({ id: "singleton", active_sessions: active, updated_at: nowIso })
+      .select("id");
+    // Unique-violation (23505) means another concurrent poller already inserted
+    // the singleton row first -- that's a lost race, not a real error.
+    claimed = error ? null : data;
+  }
+
+  if (!claimed || claimed.length === 0) {
+    return { changed: false };
+  }
+
   const text = buildSessionChangeMessage(opened, closed, active);
   await Promise.all([sendToChannel(vipChannelId(), text), sendToChannel(publicChannelId(), text)]);
-
-  await admin
-    .from("qco2_session_state")
-    .upsert({ id: "singleton", active_sessions: active, updated_at: new Date().toISOString() });
 
   return { changed: true, opened, closed, active };
 }
