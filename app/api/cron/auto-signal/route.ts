@@ -483,7 +483,23 @@ async function processPair(
     .select()
     .single();
 
-  if (error) return { pair: pair.key, action: "error", error: error.message };
+  if (error) {
+    // Fix 2026-07-29 (duplicate signal creation bug): a DB-level partial unique
+    // index (qco2_signals_one_active_auto_per_pair, one row WHERE status='active'
+    // AND source='auto' per pair) now backstops the earlier in-app "no active auto
+    // signal" check, which had its own race: 2 concurrent pollers (client
+    // heartbeat/GitHub Actions/Base44 workflow) could both read "no active signal
+    // yet" before either finished inserting, so BOTH created a real signal row a
+    // few hundred ms apart -- each with its own legit TP/SL alerts, which is why
+    // it looked like "every alert is duplicated" (it was actually 2 separate real
+    // signals, not 1 signal double-alerting). A unique-violation (23505) here means
+    // another concurrent poller won that race a moment earlier -- silently skip,
+    // don't treat it as a real error.
+    if (error.code === "23505") {
+      return { pair: pair.key, action: "duplicate_prevented", reason: "another poller already created this signal" };
+    }
+    return { pair: pair.key, action: "error", error: error.message };
+  }
 
   const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, "none", result.confidence, result.reasoning, []);
   // Owner request 2026-07-28: Telegram channel blasts only for XAU -- BTC/ETH/SOL
