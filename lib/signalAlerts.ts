@@ -170,8 +170,30 @@ export async function closeViaSl(
   pair: PairConfig,
   decimals: number,
   signal: Record<string, any>
-): Promise<{ status: "fired" | "closed_other" }> {
+): Promise<{ status: "fired" | "closed_other" | "closed_secured" }> {
   if (signal.status !== "active") return { status: "closed_other" };
+
+  // Owner request 2026-07-29 ("area yang udah sentuh tp1, kalau balik kena sl
+  // jangan di-alert, WR gua ancur"): once a signal has already reached TP1, the
+  // BE alert already told members to secure profit there -- in real trading the
+  // stop would've been moved to breakeven at that point, so the ORIGINAL SL
+  // should no longer be reachable/countable as a real loss. If price reverses
+  // all the way back to the original SL after TP1 was tagged, close it as a
+  // secured win at the highest TP level actually reached (not a loss), and don't
+  // send an SL alert at all -- members already got the BE instruction, no need
+  // to re-alert a reversal that doesn't change their real outcome.
+  const highestTp: number = signal.tp_alert_level || 0;
+  if (highestTp >= 1) {
+    const { data: claimed, error: claimErr } = await admin
+      .from("qco2_signals")
+      .update({ status: "tp_hit", hit_level: `tp${highestTp}`, closed_at: new Date().toISOString() })
+      .eq("id", signal.id)
+      .eq("status", "active")
+      .select("id");
+    if (claimErr || !claimed || claimed.length === 0) return { status: "closed_other" };
+    return { status: "closed_secured" };
+  }
+
   // Same CAS fix as advanceTp() -- claim the close atomically (WHERE status='active')
   // BEFORE sending the alert, so two concurrent pollers can't both fire the SL message.
   const { data: claimed, error: claimErr } = await admin

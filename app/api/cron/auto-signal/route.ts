@@ -234,16 +234,19 @@ async function monitorOneSignal(
   const tps: number[] = [active.take_profit, active.tp2, active.tp3, active.tp4].filter((v) => v !== null && v !== undefined);
   const sl = active.stop_loss;
 
-  // SL always takes priority and closes immediately, regardless of how many TP
-  // levels have already been alerted -- the raw SL price never moves on its own
-  // (BE alerts just tell the member to move it manually), so if price round-trips
-  // all the way back down/up to it after running through TP1/TP2, that's still a
-  // real stop-out. Uses the SAME closeViaSl() the admin's manual SL button calls
-  // (lib/signalAlerts.ts) -- automatic and manual can never conflict or double-fire.
+  // SL closes the position whenever the raw SL price is touched. Owner request
+  // 2026-07-29: if TP1 (or higher) was ALREADY reached before this reversal, the
+  // BE alert already told members to secure profit there -- so hitting the
+  // original SL afterward is no longer counted as a real loss (WR-destroying),
+  // it's closed as a secured win at the highest TP level reached, silently (no
+  // SL alert sent -- see closeViaSl() in lib/signalAlerts.ts for the full logic).
+  // Uses the SAME closeViaSl() the admin's manual SL button calls -- automatic
+  // and manual can never conflict or double-fire.
   const slHit = dir === "BUY" ? livePrice <= sl : livePrice >= sl;
   if (slHit) {
-    await closeViaSl(admin, pair, decimals, active);
-    return { pair: pair.key, source: active.source, action: "closed", hit_level: "sl", still_active: false };
+    const result = await closeViaSl(admin, pair, decimals, active);
+    const hitLevel = result.status === "closed_secured" ? `tp${active.tp_alert_level || 1}_secured` : "sl";
+    return { pair: pair.key, source: active.source, action: "closed", hit_level: hitLevel, still_active: false };
   }
 
   // Progressive TP alerts: find the HIGHEST tp index reached this tick, then hand it
