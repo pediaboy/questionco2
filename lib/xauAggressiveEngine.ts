@@ -136,7 +136,8 @@ export function evaluateXauAggressive(
   m5: Candle[],
   newsBlackout: boolean,
   pipUnit: number = 0.1,
-  livePrice?: number
+  livePrice?: number,
+  m3?: Candle[]
 ): XauAggressiveResult {
   const checklist: { label: string; pass: boolean }[] = [];
 
@@ -159,6 +160,13 @@ export function evaluateXauAggressive(
   const ema20M5 = ema(m5Closes, 20);
   const rsiM1 = rsi(m1Closes, 14);
   const rsiM5 = rsi(m5Closes, 14);
+  // RSI M3 (owner request 2026-08-03, "pake indikator rsi menit 3") -- optional
+  // extra confirmation layer. Guarded: if M3 candles are missing or too short,
+  // rsiNowM3 stays null and every M3 check below is skipped safely (never blocks
+  // or errors just because M3 data wasn't available this tick).
+  const hasM3 = Array.isArray(m3) && m3.length >= 20;
+  const rsiM3Series = hasM3 ? rsi(m3!.map((c) => c.close), 14) : [];
+  const rsiNowM3: number | null = hasM3 && !Number.isNaN(rsiM3Series[rsiM3Series.length - 1]) ? rsiM3Series[rsiM3Series.length - 1] : null;
   const bbM1 = bollinger(m1Closes, 20, 2);
   const psarM1 = psarSeries(m1, 0.02, 0.2);
 
@@ -230,15 +238,17 @@ export function evaluateXauAggressive(
   // ---- 2. RSI momentum (veto only at true exhaustion extremes) ----
   const rsiNowM1 = rsiM1[l1];
   const rsiNowM5 = rsiM5[l5];
+  const rsiM3Exhausted = rsiNowM3 !== null && (direction === "BUY" ? rsiNowM3 > 78 : rsiNowM3 < 22);
   const rsiExhausted =
-    direction === "BUY" ? rsiNowM1 > 78 || rsiNowM5 > 75 : rsiNowM1 < 22 || rsiNowM5 < 25;
+    (direction === "BUY" ? rsiNowM1 > 78 || rsiNowM5 > 75 : rsiNowM1 < 22 || rsiNowM5 < 25) || rsiM3Exhausted;
   checklist.push({ label: "RSI Belum Exhausted", pass: !rsiExhausted });
 
   if (rsiExhausted) {
+    const rsiM3Label = rsiNowM3 !== null ? ` / M3 ${rsiNowM3.toFixed(1)}` : "";
     return {
       direction: null,
       confidence: 20,
-      reasoning: `Tren ${direction} sejalan tapi RSI sudah exhausted (M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}) — NO TRADE, tunggu koreksi dulu`,
+      reasoning: `Tren ${direction} sejalan tapi RSI sudah exhausted (M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}${rsiM3Label}) — NO TRADE, tunggu koreksi dulu`,
       atr: 0,
       checklist,
       blockReason: "RSI exhausted",
@@ -290,18 +300,28 @@ export function evaluateXauAggressive(
   else if (m5Opposes) confidence -= 12; // M1 scalp against the slower M5 read -- still tradeable, flagged riskier
   if (psarAgrees) confidence += 10;
   if (direction === "BUY" ? rsiNowM1 >= 50 && rsiNowM1 <= 72 : rsiNowM1 <= 50 && rsiNowM1 >= 28) confidence += 8;
+  // RSI M3 sweet-spot bonus (owner request 2026-08-03) -- same "healthy momentum,
+  // not yet exhausted" band as M1, small +5 since M3 sits between M1 and M5 in
+  // responsiveness. Fully optional: no M3 data this tick just means no bonus, not
+  // a block (hasM3 guard keeps this from ever throwing on missing/short data).
+  const rsiM3SweetSpot =
+    rsiNowM3 !== null && (direction === "BUY" ? rsiNowM3 >= 50 && rsiNowM3 <= 72 : rsiNowM3 <= 50 && rsiNowM3 >= 28);
+  if (rsiM3SweetSpot) confidence += 5;
   if (!extendedPastBand) confidence += 6;
   else confidence -= 5; // extended past band = possible fakeout, still tradeable but noted
   confidence = clamp(confidence, 40, 92);
 
+  checklist.push({ label: "RSI M3 Sweet Spot (bonus)", pass: rsiM3SweetSpot });
+
   const bbNote = extendedPastBand ? "harga sudah extend lewat band (waspada fakeout)" : "harga masih di area normal pullback dalam band";
   const m5Note = m5Agrees ? "M5 konfirmasi searah" : m5Opposes ? "M1 scalp melawan tren M5 (lebih riskan, confidence dikurangi)" : "M5 netral/flat";
   const triggerNote = entryStyle === "psar_flip" ? "PSAR baru flip (entry lebih awal, sebelum EMA9/20 nyusul)" : "tren M1 EMA9/20 sudah established (continuation)";
+  const rsiM3Text = rsiNowM3 !== null ? ` / M3 ${rsiNowM3.toFixed(1)}` : "";
 
   return {
     direction,
     confidence,
-    reasoning: `XAU Scalp: ${triggerNote}, arah ${direction} (${m5Note}), RSI M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}, ${bbNote}. Entry dekat harga live, SL ketat di luar EMA20/PSAR.`,
+    reasoning: `XAU Scalp: ${triggerNote}, arah ${direction} (${m5Note}), RSI M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}${rsiM3Text}, ${bbNote}. Entry dekat harga live, SL ketat di luar EMA20/PSAR.`,
     atr: slPips * pipUnit,
     checklist,
     entryOverride,

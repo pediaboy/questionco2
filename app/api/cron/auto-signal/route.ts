@@ -404,11 +404,16 @@ async function processPair(
   let strategyMode: string;
 
   if (isXauAggressive) {
-    const [m1Xau, m5Xau] = await Promise.all([
+    const [m1Xau, m5Xau, m3Xau] = await Promise.all([
       fetchOkxCandles(pair.dataInstId, "1m", 150),
       fetchOkxCandles(pair.dataInstId, "5m", 60),
+      // M3 RSI confirmation (owner request 2026-08-03). Wrapped so a transient
+      // OKX failure on this one extra call can never break the whole evaluation
+      // -- falls back to an empty array, which evaluateXauAggressive already
+      // treats as "no M3 data this tick" (skips the M3 checks safely, no error).
+      fetchOkxCandles(pair.dataInstId, "3m", 60).catch(() => []),
     ]);
-    result = evaluateXauAggressive(m1Xau, m5Xau, newsBlackout, pair.pipUnit, livePrice);
+    result = evaluateXauAggressive(m1Xau, m5Xau, newsBlackout, pair.pipUnit, livePrice, m3Xau);
     strategyMode = "xau_scalp_ema_bb_rsi_psar_v1";
   } else {
     const [m5, m1] = await Promise.all([
