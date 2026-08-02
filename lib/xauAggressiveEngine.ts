@@ -167,28 +167,51 @@ export function evaluateXauAggressive(
   const e9m5 = ema9M5[l5];
   const e20m5 = ema20M5[l5];
 
-  // ---- 1. TREN MIKRO M1 (core trigger) + M5 sebagai KONFIRMASI, bukan hard gate ----
-  // Fix 2026-07-29: sebelumnya M1 DAN M5 wajib sama-sama searah (AND-gate). M5
-  // pakai EMA yang jauh lebih lambat/lagging -- begitu M5 udah condong ke satu arah
-  // dia "nyangkut" di situ cukup lama, jadi requirement AND ini bikin sinyal
-  // nyaris selalu ikut arah M5 (macro-ish) dan nge-block valid SELL setup di M1
-  // selama M5 belum ikut berbalik. Hasil nyata: 42 BUY vs 8 SELL dari 50 sinyal
-  // terakhir, padahal candle harga real di window yang sama nyaris seimbang
-  // (36 naik vs 28 turun). Sekarang M1 jadi trigger utama (sama seperti niat awal
-  // "TREN MIKRO M1" di komentar atas), M5 cuma jadi bonus/penalti confidence --
-  // biar model tetap "decisive" dan gak buta arah SELL cuma karena M5 lambat ikut.
+  // ---- 1. PSAR FLIP (leading trigger) + TREN MIKRO M1 (continuation trigger) ----
+  // Fix 2026-08-03 (owner: "jangan saat harga udh di atas baru suruh buy, dan
+  // harga sudah di bawah baru suruh sell" -- signals were lagging/chasing).
+  // The old sole trigger required EMA9>EMA20 AND price already above EMA20 for
+  // BUY -- by construction that only fires AFTER price has already risen long
+  // enough to pull EMA9 above EMA20, i.e. exactly the "beli pas udah naik duluan"
+  // complaint. Fix: a FRESH PSAR flip (within the last 3 M1 candles) is now the
+  // PRIMARY trigger -- PSAR flips right at the reversal candle, before EMA9/20
+  // has caught up, so it catches the turn near its actual start instead of
+  // confirming it after the fact. The EMA9/20-vs-price trend logic is kept as a
+  // SECONDARY continuation trigger (no fresh PSAR flip, but an established M1
+  // trend is still running) -- this also adds a whole extra trigger path on top
+  // of the old one, directly answering "harus sering kasih sinyal" (more frequent)
+  // without loosening the RSI/news safety checks below.
   const m1Bull = e9m1 > e20m1;
   const m1Bear = e9m1 < e20m1;
   const m5Bull = e9m5 > e20m5;
   const m5Bear = e9m5 < e20m5;
 
+  const psarLookback = 3;
+  const psarFlippedBull =
+    psarM1.length > psarLookback && !psarM1[psarM1.length - 1 - psarLookback].bull && psarM1[psarM1.length - 1].bull;
+  const psarFlippedBear =
+    psarM1.length > psarLookback && psarM1[psarM1.length - 1 - psarLookback].bull && !psarM1[psarM1.length - 1].bull;
+
   let direction: "BUY" | "SELL" | null = null;
-  if (m1Bull && currentPrice > e20m1) direction = "BUY";
-  else if (m1Bear && currentPrice < e20m1) direction = "SELL";
+  let entryStyle: "psar_flip" | "trend" = "trend";
+  if (psarFlippedBull) {
+    direction = "BUY";
+    entryStyle = "psar_flip";
+  } else if (psarFlippedBear) {
+    direction = "SELL";
+    entryStyle = "psar_flip";
+  } else if (m1Bull && currentPrice > e20m1) {
+    direction = "BUY";
+    entryStyle = "trend";
+  } else if (m1Bear && currentPrice < e20m1) {
+    direction = "SELL";
+    entryStyle = "trend";
+  }
 
   const m5Agrees = direction === "BUY" ? m5Bull : direction === "SELL" ? m5Bear : false;
   const m5Opposes = direction === "BUY" ? m5Bear : direction === "SELL" ? m5Bull : false;
 
+  checklist.push({ label: "PSAR Baru Flip (trigger utama)", pass: entryStyle === "psar_flip" });
   checklist.push({ label: "Tren M1 (EMA9 vs EMA20)", pass: m1Bull || m1Bear });
   checklist.push({ label: "Harga vs EMA20 M1", pass: direction !== null });
   checklist.push({ label: "Tren M5 Konfirmasi (bonus, bukan wajib)", pass: m5Agrees });
@@ -197,10 +220,10 @@ export function evaluateXauAggressive(
     return {
       direction: null,
       confidence: 0,
-      reasoning: `Tren M1 (${m1Bull ? "bullish" : m1Bear ? "bearish" : "flat"}) belum jelas / harga belum di sisi EMA20 M1 yang benar — NO TRADE, tunggu struktur jelas`,
+      reasoning: `Belum ada flip PSAR baru, tren M1 (${m1Bull ? "bullish" : m1Bear ? "bearish" : "flat"}) belum jelas / harga belum di sisi EMA20 M1 yang benar — NO TRADE, tunggu struktur jelas`,
       atr: 0,
       checklist,
-      blockReason: "Tren M1 belum jelas",
+      blockReason: "Belum ada trigger valid",
     };
   }
 
@@ -256,7 +279,13 @@ export function evaluateXauAggressive(
   const tpPrices = tpPipsList.map((p) => (direction === "BUY" ? entryOverride + p * pipUnit : entryOverride - p * pipUnit));
 
   // Confidence: base + bonuses. No hard multi-layer gate anymore -- decisive by design.
-  let confidence = 68;
+  // 2026-08-03: psar_flip entries (leading, catches the turn early) start from a
+  // slightly lower base than trend entries (less time for EMA/RSI to confirm yet)
+  // but get an extra bonus if the M1 EMA trend already agrees too (early + already
+  // confluent = the highest quality catch: right at the turn, not chasing it).
+  const emaAlreadyAgrees = direction === "BUY" ? m1Bull : m1Bear;
+  let confidence = entryStyle === "psar_flip" ? 62 : 68;
+  if (entryStyle === "psar_flip" && emaAlreadyAgrees) confidence += 8; // early catch + EMA already confirms
   if (m5Agrees) confidence += 10; // M5 confirms M1 -- stronger multi-timeframe alignment
   else if (m5Opposes) confidence -= 12; // M1 scalp against the slower M5 read -- still tradeable, flagged riskier
   if (psarAgrees) confidence += 10;
@@ -267,11 +296,12 @@ export function evaluateXauAggressive(
 
   const bbNote = extendedPastBand ? "harga sudah extend lewat band (waspada fakeout)" : "harga masih di area normal pullback dalam band";
   const m5Note = m5Agrees ? "M5 konfirmasi searah" : m5Opposes ? "M1 scalp melawan tren M5 (lebih riskan, confidence dikurangi)" : "M5 netral/flat";
+  const triggerNote = entryStyle === "psar_flip" ? "PSAR baru flip (entry lebih awal, sebelum EMA9/20 nyusul)" : "tren M1 EMA9/20 sudah established (continuation)";
 
   return {
     direction,
     confidence,
-    reasoning: `XAU Scalp: EMA9/20 M1 ${direction} (${m5Note}), RSI M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}, PSAR ${psarAgrees ? "konfirmasi" : "belum align"}, ${bbNote}. Entry dekat harga live, SL ketat di luar EMA20/PSAR.`,
+    reasoning: `XAU Scalp: ${triggerNote}, arah ${direction} (${m5Note}), RSI M1 ${rsiNowM1.toFixed(1)} / M5 ${rsiNowM5.toFixed(1)}, ${bbNote}. Entry dekat harga live, SL ketat di luar EMA20/PSAR.`,
     atr: slPips * pipUnit,
     checklist,
     entryOverride,
