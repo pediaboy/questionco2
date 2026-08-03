@@ -36,11 +36,13 @@ export interface XauAggressiveResult {
   tpPrices?: number[];
 }
 
-// SL fixed at 50 pips (owner spec 2026-07-24, "sl nya jauhin 50pips" -- the
-// dynamic 15-40 pip clamp based on EMA20/PSAR was too tight for gold's real M1/M5
-// noise, causing frequent whipsaw stop-outs in backtest, 12.5% winrate/-111 pips
-// over 3 days). TP1 stays dynamic off the Bollinger Band (realistic quick target).
-const SL_FIXED_PIPS = 50;
+// SL fixed at 100 pips (owner spec 2026-08-03, "edit sl nya jadi 100 pips sekarang,
+// jangan 50pips lagi buat xau" -- widened from the earlier 50-pip fix on
+// 2026-07-24, "sl nya jauhin 50pips", which itself replaced a 15-40 pip dynamic
+// clamp based on EMA20/PSAR that was too tight for gold's real M1/M5 noise,
+// causing frequent whipsaw stop-outs, 12.5% winrate/-111 pips over 3 days). TP1
+// stays dynamic off the Bollinger Band (realistic quick target).
+const SL_FIXED_PIPS = 100;
 const TP1_MIN_PIPS = 10;
 const TP1_MAX_PIPS = 25;
 
@@ -280,7 +282,7 @@ export function evaluateXauAggressive(
         : currentPrice - bbLower;
   const tp1Pips = clamp(Math.round(rawTp1Dist / pipUnit), TP1_MIN_PIPS, TP1_MAX_PIPS);
 
-  // SL fixed at 50 pips (see SL_FIXED_PIPS note above).
+  // SL fixed at 100 pips (see SL_FIXED_PIPS note above).
   const slPips = SL_FIXED_PIPS;
 
   const entryOverride = currentPrice;

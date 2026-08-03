@@ -5,13 +5,16 @@
 // live XAUUSD ticker price so displayed numbers match what members see elsewhere.
 // BTC/ETH/SOL use their OKX USDT pair directly (both signal + price anchor).
 //
-// Risk model (fixed, no ATR): SL is always 50 pips from entry. TP1/TP2/TP3 sit at
-// 50/100/200 pips — RR 1:1, 1:2, 1:4. `pipUnit` is the price value of ONE pip for
-// that instrument (e.g. 0.1 for XAUUSD), so the same 50/100/200 pip counts scale
-// correctly across very different instruments via `pipsToPrice(pips, pipUnit)`.
-// pipUnit values are calibrated so the resulting 50-pip SL sits at roughly 3-3.5x
-// each instrument's average 5-minute price range (checked live against OKX data on
-// 2026-07-19) — tight enough to matter, wide enough to survive normal noise.
+// Risk model (fixed, no ATR): SL is 50 pips from entry for BTC/ETH/SOL, 100 pips
+// for XAUUSD (widened 2026-08-03, owner request). TP1/TP2/TP3 sit at 50/100/200
+// pips — RR 1:1, 1:2, 1:4 for BTC/ETH/SOL (XAU's RR is now looser since its SL
+// doubled but TP ladder didn't -- that's an intentional owner-requested SL-only
+// change, not a bug). `pipUnit` is the price value of ONE pip for that instrument
+// (e.g. 0.1 for XAUUSD), so pip counts scale correctly across very different
+// instruments via `pipsToPrice(pips, pipUnit)`. pipUnit values are calibrated so
+// the ORIGINAL 50-pip SL sat at roughly 3-3.5x each instrument's average 5-minute
+// price range (checked live against OKX data on 2026-07-19) — tight enough to
+// matter, wide enough to survive normal noise.
 export interface PairConfig {
   key: string;
   label: string;
@@ -32,7 +35,7 @@ export const SIGNAL_PAIRS: PairConfig[] = [
     useLiveTickerFor: "XAU/USD",
     pipUnit: 0.1, // 1 pip = $0.10 move (standard XAUUSD retail convention)
     tpPips: [50, 100, 200],
-    slPips: 50,
+    slPips: 100, // widened from 50 (owner request 2026-08-03) -- XAU-only override, BTC/ETH/SOL stay at 50. Kept in sync with SL_FIXED_PIPS in lib/xauAggressiveEngine.ts (the actual value the live auto-engine uses) so recap/reporting/live-status math agree with what really got traded.
     pipLabelSuffix: "pips",
     skipWeekends: true,
   },
