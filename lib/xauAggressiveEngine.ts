@@ -40,6 +40,8 @@ export interface XauAggressiveResult {
   // "price the engine decided on" and "price actually sent to Telegram").
   slPipsOffset?: number;
   tpPipsOffsets?: number[];
+  liveRefPrice?: number;
+  entryOffsetPips?: number;
 }
 
 // SL fixed at 100 pips (owner spec 2026-08-03, "edit sl nya jadi 100 pips sekarang,
@@ -49,6 +51,13 @@ export interface XauAggressiveResult {
 // causing frequent whipsaw stop-outs, 12.5% winrate/-111 pips over 3 days). TP1
 // stays dynamic off the Bollinger Band (realistic quick target).
 const SL_FIXED_PIPS = 100;
+// Standby/limit-order entry gap (owner request 2026-08-05: "kasih setup nya itu
+// beda 20-30pips, biar member bisa pasang/standby di area itu, karna kalo
+// langsung masang jadi kaget"). Entry is now a resting limit level 25 pips away
+// from live price (BUY waits for a pullback DOWN to buy lower, SELL waits for a
+// rally UP to sell higher) instead of an immediate near-market entry -- gives
+// members time to calmly place a pending order instead of reacting instantly.
+export const ENTRY_OFFSET_PIPS = 25;
 const TP1_MIN_PIPS = 10;
 const TP1_MAX_PIPS = 25;
 
@@ -311,7 +320,13 @@ export function evaluateXauAggressive(
   // SL fixed at 100 pips (see SL_FIXED_PIPS note above).
   const slPips = SL_FIXED_PIPS;
 
-  const entryOverride = currentPrice;
+  // entryOverride is now a STANDBY/limit level, not the live price itself --
+  // BUY rests below currentPrice (buy the pullback), SELL rests above (sell the
+  // rally). liveRefPrice is kept separately so the Telegram message can show
+  // "harga sekarang" alongside the entry zone for context.
+  const liveRefPrice = currentPrice;
+  const entryOverride =
+    direction === "BUY" ? currentPrice - ENTRY_OFFSET_PIPS * pipUnit : currentPrice + ENTRY_OFFSET_PIPS * pipUnit;
   const slPrice = direction === "BUY" ? entryOverride - slPips * pipUnit : entryOverride + slPips * pipUnit;
   const tpPipsList = [tp1Pips, tp1Pips + 15, tp1Pips + 30, tp1Pips + 50];
   const tpPrices = tpPipsList.map((p) => (direction === "BUY" ? entryOverride + p * pipUnit : entryOverride - p * pipUnit));
@@ -357,5 +372,7 @@ export function evaluateXauAggressive(
     tpPrices,
     slPipsOffset: slPips,
     tpPipsOffsets: tpPipsList,
+    liveRefPrice,
+    entryOffsetPips: ENTRY_OFFSET_PIPS,
   };
 }

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { fetchOkxCandles, fetchOkxLastPrice } from "@/lib/signalEngine";
 import { evaluateInstitutional, EngineSettings, DEFAULT_ENGINE_SETTINGS, FactorWeights } from "@/lib/institutionalEngine";
-import { evaluateXauAggressive } from "@/lib/xauAggressiveEngine";
+import { evaluateXauAggressive, ENTRY_OFFSET_PIPS } from "@/lib/xauAggressiveEngine";
 import { isNewsBlackout } from "@/lib/newsFilter";
 import { getActiveSessions } from "@/lib/marketSessions";
 import { SIGNAL_PAIRS, PairConfig } from "@/lib/signalPairs";
@@ -17,6 +17,12 @@ export const dynamic = "force-dynamic";
 const CRON_SECRET = "7b8725bd97d8ee2a3c4c9f27fd320bbed065ad05efb1d66d";
 const AUTO_COOLDOWN_MINUTES = 30; // no fresh auto signal for a pair within 30min of its last auto signal closing (owner request 2026-07-20)
 const TIMEOUT_MINUTES = 60;
+// If price never pulls back/rallies into the standby entry zone within this many
+// minutes, cancel the setup and free the pair for a fresh evaluation (owner
+// 2026-08-05 standby-entry feature) -- otherwise an unreachable pending order
+// would block new signals indefinitely via the "one active auto signal per pair"
+// gate.
+const XAU_PENDING_TIMEOUT_MINUTES = 15;
 // Owner request 2026-07-21: the old XAU-only 20-min BLANKET timeout was firing way
 // too early -- a signal would only reach TP1 (small partial profit) then time out
 // 20min later regardless, immediately freeing the pair for a fresh (often losing)
@@ -65,7 +71,8 @@ function buildInstitutionalSignalMessage(
   _trend: "up" | "down" | "none",
   _confidence: number,
   _reasoning: string,
-  _checklist: { label: string; pass: boolean }[]
+  _checklist: { label: string; pass: boolean }[],
+  liveRefPrice?: number
 ) {
   // Clean customer-facing "VVIP signal" style (2026-07-20, per owner's exact
   // reference example) — technical confidence/reasoning/checklist stay in the DB
@@ -74,12 +81,15 @@ function buildInstitutionalSignalMessage(
   const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   const pips = (price: number) => Math.round(Math.abs(price - entry) / pair.pipUnit);
 
-  // XAU entries are now near-live-price scalp entries (owner spec 2026-07-24), not
-  // resting limit orders -- back to a plain BUY/SELL label with the standard
-  // cosmetic +/-3 pip entry-zone buffer. TP1 keeps the BEP note for XAU (still good
-  // practice: lock in the fast first target before the wider runners).
+  // XAU entries are STANDBY/limit-order levels again (owner 2026-08-05: "kasih
+  // setup nya itu beda 20-30pips, biar member bisa pasang/standby di area itu,
+  // karna kalo langsung masang jadi kaget" -- replaces the near-live-price scalp
+  // entry from 2026-07-24). `liveRefPrice` (when provided) shows the current
+  // market price alongside the entry zone so members understand the gap is
+  // intentional, not a stale/wrong number. TP1 keeps the BEP note for XAU (still
+  // good practice: lock in the fast first target before the wider runners).
   const isXau = pair.key === "XAUUSD";
-  const zoneBuffer = 3 * pair.pipUnit;
+  const zoneBuffer = (isXau ? 3 : 3) * pair.pipUnit;
   const zoneLow = direction === "SELL" ? entry : entry - zoneBuffer;
   const zoneHigh = direction === "SELL" ? entry + zoneBuffer : entry;
 
@@ -87,9 +97,15 @@ function buildInstitutionalSignalMessage(
     .map((tp, i) => `   TP${i + 1}  ›  ${fmt(tp)}  (${pips(tp)} pips)${isXau && i === 0 ? "  — Set BEP (geser SL ke Entry)" : ""}`)
     .join("\n");
 
+  const orderTypeLabel = direction === "BUY" ? "BUY LIMIT" : "SELL LIMIT";
+  const liveRefLine = isXau && liveRefPrice !== undefined ? `💰 HARGA SEKARANG : ${fmt(liveRefPrice)}\n` : "";
+  const standbyNote = isXau
+    ? `\n📌 <b>STANDBY / PASANG ${orderTypeLabel}</b> di area entry — JANGAN market order langsung. Sinyal aktif otomatis begitu harga menyentuh area ini (maks tunggu ${XAU_PENDING_TIMEOUT_MINUTES} menit, lewat itu setup batal).\n`
+    : "";
+
   return (
     `⚜️ <b>LASTQUESTION VVIP SIGNAL</b> ⚜️\n━━━━━━━━━━━━━━━━\n\n` +
-    `📊 PAIR    : ${pair.label}\n📈 SETUP   : <b>${direction}</b>\n🎯 ENTRY   : ${fmt(zoneLow)} – ${fmt(zoneHigh)}\n\n` +
+    `📊 PAIR    : ${pair.label}\n📈 SETUP   : <b>${direction}</b>\n${liveRefLine}🎯 ENTRY   : ${fmt(zoneLow)} – ${fmt(zoneHigh)}\n${standbyNote}\n` +
     `🎯 TAKE PROFIT\n${tpLines}\n\n` +
     `🛑 STOP LOSS : ${fmt(sl)}  (${pips(sl)} pips)\n\n` +
     `⚠️ Gunakan money management.\nAmankan profit di TP1 / TP2, hindari overtrade.\n\n` +
@@ -309,6 +325,76 @@ async function monitorOneSignal(
   return { pair: pair.key, source: active.source, action: "monitoring", live_price: livePrice, pips_running: Math.round(pipsRunning), still_active: true };
 }
 
+// Standby/limit-entry fill check (owner 2026-08-05: "kasih setup nya itu beda
+// 20-30pips, biar member bisa pasang/standby di area itu"). Auto XAU signals are
+// created with strategy_mode ending in "_pending" and status still "active" (so
+// the existing one-active-auto-per-pair DB constraint + cooldown logic keep
+// working unchanged) -- this runs INSTEAD of monitorOneSignal() for those rows
+// until the entry zone is actually touched, then hands off to normal TP/SL/BE
+// monitoring from the next tick onward.
+async function checkXauPendingFill(
+  admin: ReturnType<typeof getSupabaseAdmin>,
+  pair: PairConfig,
+  decimals: number,
+  livePrice: number,
+  active: Record<string, any>
+) {
+  const dir = active.direction as "BUY" | "SELL";
+  const entry = active.entry;
+  const filled = dir === "BUY" ? livePrice <= entry : livePrice >= entry;
+
+  if (filled) {
+    // CAS claim: strip the "_pending" suffix so future ticks route this row
+    // through the normal TP/SL/BE path -- guards against 2 concurrent pollers
+    // both detecting the fill and both sending the "ENTRY TERISI" alert.
+    const newMode = String(active.strategy_mode || "").replace(/_pending$/, "");
+    const { data: claimed } = await admin
+      .from("qco2_signals")
+      .update({ strategy_mode: newMode })
+      .eq("id", active.id)
+      .eq("status", "active")
+      .like("strategy_mode", "%_pending")
+      .select("id");
+
+    if (!claimed || claimed.length === 0) {
+      return { pair: pair.key, source: active.source, action: "already_filled", still_active: true };
+    }
+
+    const fmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    const msg =
+      `✅ <b>ENTRY TERISI — ${pair.label}</b>\n━━━━━━━━━━━━━━━━\n\n` +
+      `Harga sudah masuk ke area entry <b>${fmt(entry)}</b>.\n` +
+      `Posisi resmi <b>AKTIF</b> — pantau TP/SL dari sini.\n\n` +
+      `#LASTQUESTIONVVIP`;
+    await sendSignalAlert(pair.key, active.audience, msg);
+    return { pair: pair.key, source: active.source, action: "entry_filled", still_active: true };
+  }
+
+  const ageMin = (Date.now() - new Date(active.created_at).getTime()) / 60000;
+  if (ageMin >= XAU_PENDING_TIMEOUT_MINUTES) {
+    const { data: claimed } = await admin
+      .from("qco2_signals")
+      .update({ status: "timeout", hit_level: "timeout_pending", closed_at: new Date().toISOString() })
+      .eq("id", active.id)
+      .eq("status", "active")
+      .select("id");
+
+    if (!claimed || claimed.length === 0) {
+      return { pair: pair.key, source: active.source, action: "already_closed", still_active: false };
+    }
+
+    const msg =
+      `⏳ <b>SETUP DIBATALKAN — ${pair.label}</b>\n━━━━━━━━━━━━━━━━\n\n` +
+      `Harga belum sempat masuk ke area entry dalam ${XAU_PENDING_TIMEOUT_MINUTES} menit.\n` +
+      `🔓 Slot signal baru sudah terbuka.`;
+    await sendSignalAlert(pair.key, active.audience, msg);
+    return { pair: pair.key, source: active.source, action: "pending_cancelled", still_active: false };
+  }
+
+  const pipsToEntry = Math.round(Math.abs(livePrice - entry) / pair.pipUnit);
+  return { pair: pair.key, source: active.source, action: "pending_wait", pips_to_entry: pipsToEntry, still_active: true };
+}
+
 async function processPair(
   pair: PairConfig,
   admin: ReturnType<typeof getSupabaseAdmin>,
@@ -346,7 +432,10 @@ async function processPair(
     const monitorResults = [];
     let hasActiveAuto = false;
     for (const row of rows) {
-      const r = await monitorOneSignal(admin, pair, decimals, livePrice, row);
+      const isPendingXau = row.source === "auto" && typeof row.strategy_mode === "string" && row.strategy_mode.endsWith("_pending");
+      const r = isPendingXau
+        ? await checkXauPendingFill(admin, pair, decimals, livePrice, row)
+        : await monitorOneSignal(admin, pair, decimals, livePrice, row);
       monitorResults.push(r);
       if (row.source === "auto" && r.still_active) hasActiveAuto = true;
     }
@@ -450,7 +539,11 @@ async function processPair(
       xauFreshPrice = livePrice;
     }
   }
-  const entry = isXauAggressive ? xauFreshPrice : livePrice;
+  const entry = isXauAggressive
+    ? result.direction === "BUY"
+      ? xauFreshPrice - ENTRY_OFFSET_PIPS * pair.pipUnit
+      : xauFreshPrice + ENTRY_OFFSET_PIPS * pair.pipUnit
+    : livePrice;
 
   // XAU: SL/TP come straight from the engine itself -- SL just outside the nearest
   // EMA20/PSAR level, TP1 a realistic quick Bollinger-band target, TP2-4 wider
@@ -517,7 +610,10 @@ async function processPair(
       audience: riskSettings.autoSignalAudience,
       confidence: result.confidence,
       reasoning: result.reasoning,
-      strategy_mode: strategyMode,
+      // XAU auto signals start as a standby/limit entry -- append "_pending" so
+      // checkXauPendingFill() (not the normal TP/SL monitor) handles this row
+      // until price actually reaches the entry zone (owner 2026-08-05).
+      strategy_mode: isXauAggressive ? `${strategyMode}_pending` : strategyMode,
     })
     .select()
     .single();
@@ -540,7 +636,7 @@ async function processPair(
     return { pair: pair.key, action: "error", error: error.message };
   }
 
-  const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, "none", result.confidence, result.reasoning, []);
+  const message = buildInstitutionalSignalMessage(pair, result.direction, entry, sl, tps, decimals, "none", result.confidence, result.reasoning, [], isXauAggressive ? xauFreshPrice : undefined);
   // Owner request 2026-07-28: Telegram channel blasts only for XAU -- BTC/ETH/SOL
   // still get created, monitored, pushed (web) and shown on the dashboard, just not
   // posted to the Telegram channel/group.
