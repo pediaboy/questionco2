@@ -7,11 +7,22 @@ name: Daily Recap Backup
 # cron jobs" issue already hit with the signal engine itself). The recap Telegram
 # message has effectively not been sent in over a week. Same fix pattern as
 # fast-signal-ping.yml: a GitHub Actions daily cron as an independent backup that
-# doesn't depend on Base44's scheduler at all. Fires once at 23:55 WIB (16:55 UTC),
-# matching the original intended recap time.
+# doesn't depend on Base44's scheduler at all.
+#
+# UPDATE 2026-08-06 (owner: "rekap signal itu dikirim jam 23.00 bukan jam 1
+# malem"): GitHub Actions scheduled crons are best-effort and were observed
+# firing 50-95 min LATE almost every day (checked via GH API run history) --
+# scheduling at 16:55 UTC (23:55 WIB) meant actual sends landed ~00:50-01:30
+# WIB, past midnight. Moved the schedule earlier to 15:00 UTC (22:00 WIB) to
+# absorb the typical delay and land closer to the owner's desired ~23:00 WIB.
+# This is a mitigation, not a guarantee -- GH's delay is NOT deterministic. The
+# real correctness fix is in lib/signalRecap.ts (recapTargetDate): the recap
+# now always summarizes the correct just-ended WIB day regardless of exactly
+# when it fires, so even on a still-late day the DATA is right, only the send
+# time shifts.
 on:
   schedule:
-    - cron: "55 16 * * *"
+    - cron: "0 15 * * *"
   workflow_dispatch: {}
 
 jobs:

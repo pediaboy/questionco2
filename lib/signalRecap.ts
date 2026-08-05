@@ -21,7 +21,11 @@ export function summarizeSignals(rows: RecapSignalRow[]) {
   const total = rows.length;
   const profit = rows.filter((r) => r.status === "tp_hit").length;
   const loss = rows.filter((r) => r.status === "sl_hit").length;
-  const beCancel = rows.filter((r) => r.status === "closed").length;
+  // Fix 2026-08-06: "timeout" signals were falling through every bucket (not
+  // profit/loss/closed) so total didn't match profit+loss+beCancel whenever a
+  // timeout happened that day. Timeout = no BE/TP/SL hit before expiry, so it
+  // belongs in BE/Cancel same as an explicit "closed".
+  const beCancel = rows.filter((r) => r.status === "closed" || r.status === "timeout").length;
 
   const byPair: Record<string, { tpPips: number; slPips: number; net: number; suffix: string }> = {};
   for (const r of rows) {
@@ -55,4 +59,25 @@ export function formatDateWIB(d: Date): string {
 export function wibDayString(d: Date): string {
   const wib = new Date(d.getTime() + 7 * 60 * 60 * 1000);
   return wib.toISOString().slice(0, 10);
+}
+
+/**
+ * Fix 2026-08-06 (owner: "rekap signal itu dikirim jam 23.00 anjing bukan jam 1
+ * malem... yg dibaca hari ini, dari kemaren ga bener banget"). Root cause: the
+ * recap is meant to summarize a WIB calendar day that has essentially just
+ * ended (fires ~23:00-23:55 WIB), but GitHub Actions' scheduled cron is
+ * best-effort and was firing 50-95 min LATE most days -- often crossing
+ * midnight WIB. Once execution time is past midnight, using `now` directly to
+ * pick "today" silently recaps the WRONG (brand-new, nearly-empty) day instead
+ * of the day that just ended.
+ *
+ * Fix: shift the reference time back by a buffer before deriving the WIB day
+ * string, so late firing (up to ~20h late) still resolves to the correct
+ * just-ended day. Used for BOTH the DB query filter and the displayed date
+ * label -- they must always agree.
+ */
+const RECAP_LATE_FIRE_BUFFER_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+export function recapTargetDate(executedAt: Date): Date {
+  return new Date(executedAt.getTime() - RECAP_LATE_FIRE_BUFFER_MS);
 }
