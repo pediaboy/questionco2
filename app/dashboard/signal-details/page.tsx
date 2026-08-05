@@ -16,6 +16,7 @@ interface SignalFull {
   tp2: number | null;
   tp3: number | null;
   tp4: number | null;
+  tp5: number | null;
   status: string;
   source: string;
   audience: string;
@@ -120,7 +121,7 @@ function DetailsInner() {
             <p className="text-white font-mono">{signal.status.toUpperCase()}</p>
           </div>
         </div>
-        {(signal.tp2 || signal.tp3 || signal.tp4) && (
+        {(signal.tp2 || signal.tp3 || signal.tp4 || signal.tp5) && (
           <div className="grid grid-cols-3 gap-3 text-[11px] mt-3 pt-3 border-t border-white/10">
             {signal.tp2 && (
               <div>
@@ -138,6 +139,12 @@ function DetailsInner() {
               <div>
                 <p className="text-white/30 mb-0.5">TP4</p>
                 <p className="text-emerald-400/70 font-mono">{signal.tp4}</p>
+              </div>
+            )}
+            {signal.tp5 && (
+              <div>
+                <p className="text-white/30 mb-0.5">TP5</p>
+                <p className="text-emerald-400/70 font-mono">{signal.tp5}</p>
               </div>
             )}
           </div>

@@ -87,7 +87,7 @@ export function buildBEMessage(pair: PairConfig, pipsRunning: number, decimals: 
 }
 
 function tpArray(signal: Record<string, any>): number[] {
-  return [signal.take_profit, signal.tp2, signal.tp3, signal.tp4].filter((v) => v !== null && v !== undefined);
+  return [signal.take_profit, signal.tp2, signal.tp3, signal.tp4, signal.tp5].filter((v) => v !== null && v !== undefined);
 }
 
 /** Fires an alert for every TP level newly crossed since `signal.tp_alert_level`, up

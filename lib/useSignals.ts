@@ -13,6 +13,7 @@ export interface SignalItem {
   tp2?: number | null;
   tp3?: number | null;
   tp4?: number | null;
+  tp5?: number | null;
   source?: string;
   audience?: string;
   status: string;

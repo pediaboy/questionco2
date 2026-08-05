@@ -23,6 +23,9 @@ export function signalStatusKeyboard(signalId: string): InlineKeyboard {
       { text: "TP4", callback_data: `sigact:tp4:${signalId}` },
     ],
     [
+      { text: "TP5", callback_data: `sigact:tp5:${signalId}` },
+    ],
+    [
       { text: "🛑 SL", callback_data: `sigact:sl:${signalId}` },
       { text: "⚖️ BE", callback_data: `sigact:be:${signalId}` },
       { text: "📊 LIVE", callback_data: `sigact:live:${signalId}` },

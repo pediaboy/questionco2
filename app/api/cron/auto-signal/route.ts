@@ -88,10 +88,24 @@ function buildInstitutionalSignalMessage(
   // market price alongside the entry zone so members understand the gap is
   // intentional, not a stale/wrong number. TP1 keeps the BEP note for XAU (still
   // good practice: lock in the fast first target before the wider runners).
+  // XAU zone now spans the REAL gap from current live price down/up to the
+  // standby entry level (owner 2026-08-05 reference example "buy 4120-4123" --
+  // confirmed against an old pre-07-24 signal: a genuine ~20-30 pip wide AREA to
+  // place a pending order in, not a cosmetic few-pip buffer around one exact
+  // price). Falls back to the old 3-pip cosmetic buffer for non-XAU pairs (which
+  // still use near-live-price entries, no standby concept).
   const isXau = pair.key === "XAUUSD";
-  const zoneBuffer = (isXau ? 3 : 3) * pair.pipUnit;
-  const zoneLow = direction === "SELL" ? entry : entry - zoneBuffer;
-  const zoneHigh = direction === "SELL" ? entry + zoneBuffer : entry;
+  const zoneBuffer = 3 * pair.pipUnit;
+  const zoneLow = isXau
+    ? Math.min(entry, liveRefPrice ?? entry)
+    : direction === "SELL"
+      ? entry
+      : entry - zoneBuffer;
+  const zoneHigh = isXau
+    ? Math.max(entry, liveRefPrice ?? entry)
+    : direction === "SELL"
+      ? entry + zoneBuffer
+      : entry;
 
   const tpLines = tps
     .map((tp, i) => `   TP${i + 1}  ›  ${fmt(tp)}  (${pips(tp)} pips)${isXau && i === 0 ? "  — Set BEP (geser SL ke Entry)" : ""}`)
@@ -247,7 +261,7 @@ async function monitorOneSignal(
   active: Record<string, any>
 ) {
   const dir = active.direction as "BUY" | "SELL";
-  const tps: number[] = [active.take_profit, active.tp2, active.tp3, active.tp4].filter((v) => v !== null && v !== undefined);
+  const tps: number[] = [active.take_profit, active.tp2, active.tp3, active.tp4, active.tp5].filter((v) => v !== null && v !== undefined);
   const sl = active.stop_loss;
 
   // SL closes the position whenever the raw SL price is touched. Owner request
@@ -603,6 +617,7 @@ async function processPair(
       tp2: tps[1],
       tp3: tps[2],
       tp4: tps[3] ?? null,
+      tp5: tps[4] ?? null,
       pip_unit: pair.pipUnit,
       source: "auto",
       status: "active",

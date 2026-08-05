@@ -788,10 +788,14 @@ export async function POST(req: NextRequest) {
         let sl: number;
         let tps: number[];
         if (cfg.key === "XAUUSD") {
-          // Matches the live XAU Decisive Scalping engine: SL fixed 50 pips.
-          const slDist = 50 * cfg.pipUnit;
+          // FIX 2026-08-05 (owner: "yg signal manual buy now/sell now dan input
+          // manual sl nya masih 50pips jing") -- this quick-fire path had its own
+          // hardcoded SL/TP constants that never got updated when the live XAU
+          // engine moved to SL=100 / TP ladder 50-100-150-200-300 pips (see
+          // lib/xauAggressiveEngine.ts FIXED_TP_LADDER_PIPS). Now matches exactly.
+          const slDist = 100 * cfg.pipUnit;
           sl = round(direction === "BUY" ? entry - slDist : entry + slDist);
-          tps = [30, 50, 70, 100].map((p) => round(direction === "BUY" ? entry + p * cfg.pipUnit : entry - p * cfg.pipUnit));
+          tps = [50, 100, 150, 200, 300].map((p) => round(direction === "BUY" ? entry + p * cfg.pipUnit : entry - p * cfg.pipUnit));
         } else {
           const { data: settingsRow } = await admin.from("qco2_engine_settings").select("atr_sl_multiplier, rr_targets").eq("id", 1).maybeSingle();
           const atrSlMultiplier = Number(settingsRow?.atr_sl_multiplier) || 1.5;
@@ -851,6 +855,7 @@ export async function POST(req: NextRequest) {
         tp2: tps[1] ?? null,
         tp3: tps[2] ?? null,
         tp4: tps[3] ?? null,
+        tp5: tps[4] ?? null,
         status: "active",
         source: "manual",
         audience: d.audience,

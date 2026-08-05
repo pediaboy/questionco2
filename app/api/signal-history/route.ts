@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
   // members should still know a VIP signal existed and its outcome once closed, per how /dashboard/sinyal works).
   const rows = (data || []).map((row) => {
     if (row.audience === "public" || isVip) return row;
-    return { ...row, entry: null, stop_loss: null, take_profit: null, tp2: null, tp3: null, tp4: null, locked: true };
+    return { ...row, entry: null, stop_loss: null, take_profit: null, tp2: null, tp3: null, tp4: null, tp5: null, locked: true };
   });
 
   return NextResponse.json({ success: true, signals: rows, is_vip: isVip });

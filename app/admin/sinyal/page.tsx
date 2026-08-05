@@ -22,6 +22,7 @@ type Signal = {
   tp2?: number | null;
   tp3?: number | null;
   tp4?: number | null;
+  tp5?: number | null;
   source?: string;
   hit_level?: string | null;
   status: string;
@@ -304,7 +305,7 @@ export default function SinyalAdminPage() {
                   <span className="text-[9px] text-slate-500 font-mono block uppercase">TP1</span>
                   <span className="text-emerald-400 font-mono font-bold text-sm">{sig.take_profit}</span>
                 </div>
-                {(sig.tp2 || sig.tp3 || sig.tp4) && (
+                {(sig.tp2 || sig.tp3 || sig.tp4 || sig.tp5) && (
                   <>
                     {sig.tp2 && (
                       <div>
@@ -322,6 +323,12 @@ export default function SinyalAdminPage() {
                       <div>
                         <span className="text-[9px] text-slate-500 font-mono block uppercase">TP4</span>
                         <span className="text-emerald-400/60 font-mono font-bold text-sm">{sig.tp4}</span>
+                      </div>
+                    )}
+                    {sig.tp5 && (
+                      <div>
+                        <span className="text-[9px] text-slate-500 font-mono block uppercase">TP5</span>
+                        <span className="text-emerald-400/60 font-mono font-bold text-sm">{sig.tp5}</span>
                       </div>
                     )}
                   </>

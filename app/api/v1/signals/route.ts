@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
 
   let query = admin
     .from("qco2_signals")
-    .select("pair, direction, entry, stop_loss, take_profit, tp2, tp3, tp4, status, source, audience, created_at")
+    .select("pair, direction, entry, stop_loss, take_profit, tp2, tp3, tp4, tp5, status, source, audience, created_at")
     .order("created_at", { ascending: false })
     .limit(20);
 

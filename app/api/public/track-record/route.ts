@@ -13,6 +13,7 @@ interface SignalRow {
   tp2: number | null;
   tp3: number | null;
   tp4: number | null;
+  tp5: number | null;
   pip_unit: number | null;
   status: string;
   hit_level: string | null;
@@ -31,6 +32,7 @@ function realPips(sig: SignalRow): number {
   else if (sig.hit_level === "tp2") exitPrice = sig.tp2;
   else if (sig.hit_level === "tp3") exitPrice = sig.tp3;
   else if (sig.hit_level === "tp4") exitPrice = sig.tp4;
+  else if (sig.hit_level === "tp5") exitPrice = sig.tp5;
   if (exitPrice === null || !Number.isFinite(exitPrice)) return 0;
   const raw = sig.direction === "BUY" ? exitPrice - sig.entry : sig.entry - exitPrice;
   return Math.round(raw / unit);
@@ -58,7 +60,7 @@ export async function GET(req: Request) {
   const admin = getSupabaseAdmin();
   const { data, error } = await admin
     .from("qco2_signals")
-    .select("id, pair, direction, entry, stop_loss, take_profit, tp2, tp3, tp4, pip_unit, status, hit_level, closed_at, created_at")
+    .select("id, pair, direction, entry, stop_loss, take_profit, tp2, tp3, tp4, tp5, pip_unit, status, hit_level, closed_at, created_at")
     .in("status", ["tp_hit", "sl_hit", "closed"])
     .gte("closed_at", since)
     .order("closed_at", { ascending: false })

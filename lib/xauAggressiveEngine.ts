@@ -307,18 +307,15 @@ export function evaluateXauAggressive(
   // TP1: realistic quick target = distance to the band in the trade direction; if
   // price already blew past the band (breakout in progress), fall back to a
   // fraction of the band width instead of a negative/zero distance.
-  const rawTp1Dist =
-    direction === "BUY"
-      ? extendedPastBand
-        ? bandWidth * 0.5
-        : bbUpper - okxPrice
-      : extendedPastBand
-        ? bandWidth * 0.5
-        : okxPrice - bbLower;
-  const tp1Pips = clamp(Math.round(rawTp1Dist / pipUnit), TP1_MIN_PIPS, TP1_MAX_PIPS);
-
-  // SL fixed at 100 pips (see SL_FIXED_PIPS note above).
+  // rawTp1Dist/extendedPastBand above still feed the "fakeout risk" confidence
+  // checklist item -- kept for that purpose only. TP sizing itself is now a FIXED
+  // 5-level pip ladder (owner 2026-08-05, exact reference: old pre-07-24 resting-
+  // order format "TP1 50 / TP2 100 / TP3 200 / TP4 300 pips, SL 100 pips", plus a
+  // new TP3-slot inserted at 150 so the ladder is 50/100/150/200/300 -- replaces
+  // the dynamic Bollinger-clamped TP1 (10-25 pips) which no longer matches what
+  // the owner wants displayed).
   const slPips = SL_FIXED_PIPS;
+  const FIXED_TP_LADDER_PIPS = [50, 100, 150, 200, 300];
 
   // entryOverride is now a STANDBY/limit level, not the live price itself --
   // BUY rests below currentPrice (buy the pullback), SELL rests above (sell the
@@ -328,7 +325,7 @@ export function evaluateXauAggressive(
   const entryOverride =
     direction === "BUY" ? currentPrice - ENTRY_OFFSET_PIPS * pipUnit : currentPrice + ENTRY_OFFSET_PIPS * pipUnit;
   const slPrice = direction === "BUY" ? entryOverride - slPips * pipUnit : entryOverride + slPips * pipUnit;
-  const tpPipsList = [tp1Pips, tp1Pips + 15, tp1Pips + 30, tp1Pips + 50];
+  const tpPipsList = FIXED_TP_LADDER_PIPS;
   const tpPrices = tpPipsList.map((p) => (direction === "BUY" ? entryOverride + p * pipUnit : entryOverride - p * pipUnit));
 
   // Confidence: base + bonuses. No hard multi-layer gate anymore -- decisive by design.

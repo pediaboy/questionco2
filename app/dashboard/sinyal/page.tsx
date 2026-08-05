@@ -73,7 +73,7 @@ export default function SinyalPage() {
           <AnimatePresence initial={false}>
             {activeItems.map((sig) => {
               const isBuy = sig.direction === "BUY";
-              const tps = [sig.take_profit, sig.tp2, sig.tp3, sig.tp4].filter(
+              const tps = [sig.take_profit, sig.tp2, sig.tp3, sig.tp4, sig.tp5].filter(
                 (v): v is number => v !== null && v !== undefined
               );
               const accent = isBuy ? "emerald" : "rose";
