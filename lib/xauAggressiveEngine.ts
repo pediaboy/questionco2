@@ -34,6 +34,12 @@ export interface XauAggressiveResult {
   entryOverride?: number;
   slPrice?: number;
   tpPrices?: number[];
+  // Pip OFFSETS (not absolute prices) for SL/TP -- exposed so the caller can
+  // re-anchor to a freshly-fetched live price at signal-send time without
+  // re-running the whole evaluation (owner 2026-08-05: minimize the gap between
+  // "price the engine decided on" and "price actually sent to Telegram").
+  slPipsOffset?: number;
+  tpPipsOffsets?: number[];
 }
 
 // SL fixed at 100 pips (owner spec 2026-08-03, "edit sl nya jadi 100 pips sekarang,
@@ -155,6 +161,26 @@ export function evaluateXauAggressive(
   const l1 = m1.length - 1;
   const l5 = m5.length - 1;
   const currentPrice = livePrice ?? m1Closes[l1];
+  // okxPrice: the OKX (XAUT-USDT) candle's own last close -- used for EVERY
+  // internal indicator comparison below (trend-vs-EMA, Bollinger position, TP1
+  // band distance). CRITICAL fix 2026-08-05 (owner: "kalo sekarang ngasih nya di
+  // pucuk buat buy, di botom buat sell, jadi ketinggalan terus malah jadi los").
+  // Root cause: EMA9/20/Bollinger are computed from OKX M1 closes, but the trigger
+  // and band checks were comparing them against `currentPrice` = the LIVE OANDA
+  // ticker price (used for the displayed entry so it matches members' real
+  // XAUUSD broker price). OANDA and OKX's XAUT-USDT sit at a persistent ~150-200
+  // pip basis gap (verified live 2026-08-05: OANDA 4258.75 vs OKX 4240.00, a 188
+  // pip gap) -- comparing one source's raw price against the OTHER source's
+  // EMA/band level is comparing apples to oranges. Since OANDA sits persistently
+  // ABOVE the OKX basis, "currentPrice > e20m1" was nearly ALWAYS true regardless
+  // of OKX's real trend direction -- a systematic BUY bias, and "extended past
+  // Bollinger" (fakeout flag) would almost never catch real SELL setups because
+  // OANDA rarely dips below OKX's own lower band. Fix: every internal comparison
+  // now uses okxPrice (apples-to-apples with the OKX-derived EMA/Bollinger
+  // levels). currentPrice (OANDA) is kept ONLY for entryOverride -- the actual
+  // displayed entry/SL/TP price members see, which must match their own broker's
+  // live XAUUSD ticker, not OKX's proxy instrument.
+  const okxPrice = m1Closes[l1];
 
   const ema9M1 = ema(m1Closes, 9);
   const ema20M1 = ema(m1Closes, 20);
@@ -210,10 +236,10 @@ export function evaluateXauAggressive(
   } else if (psarFlippedBear) {
     direction = "SELL";
     entryStyle = "psar_flip";
-  } else if (m1Bull && currentPrice > e20m1) {
+  } else if (m1Bull && okxPrice > e20m1) {
     direction = "BUY";
     entryStyle = "trend";
-  } else if (m1Bear && currentPrice < e20m1) {
+  } else if (m1Bear && okxPrice < e20m1) {
     direction = "SELL";
     entryStyle = "trend";
   }
@@ -266,7 +292,7 @@ export function evaluateXauAggressive(
   const bbUpper = bbM1.upper[l1];
   const bbLower = bbM1.lower[l1];
   const bandWidth = bbUpper - bbLower;
-  const extendedPastBand = direction === "BUY" ? currentPrice > bbUpper : currentPrice < bbLower;
+  const extendedPastBand = direction === "BUY" ? okxPrice > bbUpper : okxPrice < bbLower;
   checklist.push({ label: "Belum Extended dari Bollinger (bukan fakeout risk)", pass: !extendedPastBand });
 
   // TP1: realistic quick target = distance to the band in the trade direction; if
@@ -276,10 +302,10 @@ export function evaluateXauAggressive(
     direction === "BUY"
       ? extendedPastBand
         ? bandWidth * 0.5
-        : bbUpper - currentPrice
+        : bbUpper - okxPrice
       : extendedPastBand
         ? bandWidth * 0.5
-        : currentPrice - bbLower;
+        : okxPrice - bbLower;
   const tp1Pips = clamp(Math.round(rawTp1Dist / pipUnit), TP1_MIN_PIPS, TP1_MAX_PIPS);
 
   // SL fixed at 100 pips (see SL_FIXED_PIPS note above).
@@ -329,5 +355,7 @@ export function evaluateXauAggressive(
     entryOverride,
     slPrice,
     tpPrices,
+    slPipsOffset: slPips,
+    tpPipsOffsets: tpPipsList,
   };
 }

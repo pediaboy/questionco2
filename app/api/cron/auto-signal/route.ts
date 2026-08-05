@@ -400,7 +400,7 @@ async function processPair(
   // zero signals -- too selective). BTC/ETH/SOL keep using Institutional SMC v3.
   const isXauAggressive = pair.key === "XAUUSD";
 
-  let result: { direction: "BUY" | "SELL" | null; confidence: number; reasoning: string; atr: number; blockReason?: string; entryOverride?: number; slPrice?: number; tpPrices?: number[] };
+  let result: { direction: "BUY" | "SELL" | null; confidence: number; reasoning: string; atr: number; blockReason?: string; entryOverride?: number; slPrice?: number; tpPrices?: number[]; slPipsOffset?: number; tpPipsOffsets?: number[] };
   let strategyMode: string;
 
   if (isXauAggressive) {
@@ -434,7 +434,23 @@ async function processPair(
     };
   }
 
-  const entry = isXauAggressive ? result.entryOverride ?? livePrice : livePrice;
+  // Re-fetch a FRESH live price right before building the actual entry/SL/TP for
+  // XAU (owner 2026-08-05: "kirim signal nya beda 20-30pips" -- the `livePrice`
+  // above was fetched at the very TOP of this function, before several sequential
+  // DB queries + OKX candle fetches; on a fast-moving gold tape that gap could let
+  // price drift meaningfully before the signal actually goes out). Re-applying the
+  // engine's own pip OFFSETS (not re-running the evaluation) to this fresher price
+  // keeps the direction/confidence decision unchanged while minimizing entry
+  // staleness. Falls back to the original livePrice if the extra fetch fails.
+  let xauFreshPrice = livePrice;
+  if (isXauAggressive) {
+    try {
+      xauFreshPrice = await getLiveXauUsd();
+    } catch {
+      xauFreshPrice = livePrice;
+    }
+  }
+  const entry = isXauAggressive ? xauFreshPrice : livePrice;
 
   // XAU: SL/TP come straight from the engine itself -- SL just outside the nearest
   // EMA20/PSAR level, TP1 a realistic quick Bollinger-band target, TP2-4 wider
@@ -444,8 +460,10 @@ async function processPair(
   let sl: number;
   let tps: number[];
   if (isXauAggressive) {
-    sl = result.slPrice!;
-    tps = result.tpPrices!;
+    const slPipsOff = result.slPipsOffset!;
+    const tpPipsOff = result.tpPipsOffsets!;
+    sl = result.direction === "BUY" ? entry - slPipsOff * pair.pipUnit : entry + slPipsOff * pair.pipUnit;
+    tps = tpPipsOff.map((p) => (result.direction === "BUY" ? entry + p * pair.pipUnit : entry - p * pair.pipUnit));
   } else if (pair.key === "BTCUSDT") {
     // BTC swing-trade profile (owner request 2026-07-21, "buat swing target tp1
     // 150pip tp2 200pip tp3 500pip") -- fixed pip TP ladder, only 3 TPs (no TP4).
