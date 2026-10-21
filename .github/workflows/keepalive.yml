@@ -1,0 +1,28 @@
+name: Keepalive
+
+# 2026-10-21: GitHub auto-disabled Fast Signal Ping + Daily Recap Backup
+# ("disabled_inactivity") after 60 days with no repo commits (last push was
+# 2026-08-05), which silently stopped ALL signal checks for ~a month. This job
+# makes a tiny commit every 2 weeks so the repo never counts as inactive again
+# and the other scheduled workflows stay enabled.
+on:
+  schedule:
+    - cron: "0 3 */14 * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Touch keepalive file and push
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/keepalive.txt
+          git config user.name "keepalive-bot"
+          git config user.email "keepalive-bot@users.noreply.github.com"
+          git add .github/keepalive.txt
+          git commit -m "chore: keepalive $(date -u +%F)" || exit 0
+          git push
